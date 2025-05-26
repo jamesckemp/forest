@@ -31,6 +31,16 @@
             padding: 20px;
             border-radius: 10px;
         }
+        #timer {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: white;
+            background: rgba(0,0,0,0.5);
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 14px;
+        }
     </style>
 </head>
 <body>
@@ -39,6 +49,7 @@
         Use WASD to move, Mouse to look around<br>
         Press SHIFT to walk slower
     </div>
+    <div id="timer" style="position:absolute; top:10px; right:10px; color:white; background:rgba(0,0,0,0.5); padding:5px 10px; border-radius:4px; font-size:14px;">0:00</div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
@@ -66,15 +77,15 @@
             document.getElementById('info').style.display = 'block';
         }, 1000);
 
-        // Fog for atmosphere and performance
-        scene.fog = new THREE.Fog(0xFFD4A3, 5, 100); // Closer fog for misty atmosphere
-        scene.background = new THREE.Color(0xFFD4A3);
+        // Fog for night-time thunderstorm atmosphere
+        scene.fog = new THREE.Fog(0x0e101a, 5, 80);
+        scene.background = new THREE.Color(0x0e101a);
 
         // Lighting
-        const ambientLight = new THREE.AmbientLight(0xFFE4B5, 0.3); // Reduced for dramatic lighting
+        const ambientLight = new THREE.AmbientLight(0x1a1e2f, 0.08); // Dim twilight ambient
         scene.add(ambientLight);
 
-        const sunLight = new THREE.DirectionalLight(0xFFC649, 2.0); // Bright golden sun
+        const sunLight = new THREE.DirectionalLight(0xcad7ff, 0.4); // Moonlight
         sunLight.position.set(800, 200, 600); // Lower in sky for golden hour
         sunLight.target.position.set(0, 0, 0); // Point towards scene center
         sunLight.castShadow = true;
@@ -89,6 +100,11 @@
         sunLight.shadow.bias = -0.0001;
         scene.add(sunLight);
         scene.add(sunLight.target);
+
+        // Lightning flash light (starts off)
+        const lightningLight = new THREE.DirectionalLight(0xffffff, 0);
+        lightningLight.position.set(0, 500, 0);
+        scene.add(lightningLight);
 
         // Volumetric light rays helper
         const rayLight = new THREE.DirectionalLight(0xFFB85F, 0.3);
@@ -137,6 +153,8 @@
         sun.position.copy(sunLight.position);
         sun.layers.enable(1); // Add to bloom layer
         scene.add(sun);
+        // Hide sun sprite for night scene
+        sun.visible = false;
 
         // Remove manual glow - will be handled by bloom effect
 
@@ -1164,11 +1182,97 @@
         let time = 0;
         let bobAmount = 0;
 
+        // Timer handle
+        const timerElement = document.getElementById('timer');
+        const startTime = performance.now();
+
+        // ---------- Lightning Manager ----------
+        class LightingManager {
+            constructor(renderer, light) {
+                this.renderer = renderer;
+                this.light = light;
+                this.baseExposure = renderer.toneMappingExposure;
+                this.timeToNextFlash = this._randGap();
+                this.sequence = null; // holds current flash pulses
+            }
+
+            _randGap() { return Math.random() * 7 + 5; } // 5–12 s between flashes
+
+            _buildFlashSequence() {
+                // Real lightning: 2–5 strokes within ~0.5 s, fastest first
+                const strokes = 2 + Math.floor(Math.random() * 4); // 2-5
+                let t = 0;
+                const pulses = [];
+                for (let i = 0; i < strokes; i++) {
+                    const duration = 0.035 + Math.random() * 0.09; // 35-125 ms
+                    const gap = (i === strokes - 1) ? 0 : 0.04 + Math.random() * 0.08; // 40-120 ms between strokes
+                    const intensity = 2.5 + Math.random() * 2; // 2.5-4.5
+                    pulses.push({ start: t, duration, intensity });
+                    t += duration + gap;
+                }
+                // Total sequence length ≈ t
+                return { time: 0, pulses, total: t };
+            }
+
+            update(dt) {
+                // If a flash sequence is active
+                if (this.sequence) {
+                    this.sequence.time += dt;
+                    const seq = this.sequence;
+                    // Find current stroke
+                    const current = seq.pulses.find(p => seq.time >= p.start && seq.time <= p.start + p.duration);
+                    if (current) {
+                        // Ramp up fast, decay quadratic within stroke
+                        const localT = (seq.time - current.start) / current.duration; // 0-1
+                        const ramp = localT < 0.15 ? (localT / 0.15) : Math.pow(1 - localT, 2);
+                        const expoBoost = current.intensity * ramp;
+                        this.light.intensity = current.intensity * ramp;
+                        this.renderer.toneMappingExposure = this.baseExposure + expoBoost;
+                    } else {
+                        // no stroke at this exact moment
+                        this.light.intensity = 0;
+                        this.renderer.toneMappingExposure = this.baseExposure;
+                    }
+
+                    // End of sequence
+                    if (seq.time >= seq.total) {
+                        this.sequence = null;
+                        this.light.intensity = 0;
+                        this.renderer.toneMappingExposure = this.baseExposure;
+                        this.timeToNextFlash = this._randGap();
+                    }
+                    return;
+                }
+
+                // Waiting period before next flash
+                this.timeToNextFlash -= dt;
+                if (this.timeToNextFlash <= 0) {
+                    this.sequence = this._buildFlashSequence();
+                }
+            }
+        }
+
+        const lightingManager = new LightingManager(renderer, lightningLight);
+
+        // Three.js clock for variable delta
+        const clock = new THREE.Clock();
+
         // Animation loop
         function animate() {
             requestAnimationFrame(animate);
             
-            time += 0.016;
+            const delta = clock.getDelta();
+            time += delta;
+            
+            // Update lightning & survival timer
+            lightingManager.update(delta);
+
+            if (timerElement) {
+                const elapsed = Math.floor((performance.now() - startTime) / 1000);
+                const mins = Math.floor(elapsed / 60);
+                const secs = elapsed % 60;
+                timerElement.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+            }
             
             // Update camera rotation from mouse
             camera.rotation.order = 'YXZ';
@@ -1177,7 +1281,6 @@
             
             // Update player movement
             const speed = movement.shift ? 4 : 8; // Doubled from 2/4
-            const delta = 0.016;
             
             playerDirection.set(0, 0, 0);
             

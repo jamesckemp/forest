@@ -59,6 +59,7 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
     <script>
         // Scene setup
         const scene = new THREE.Scene();
@@ -1014,6 +1015,10 @@
                 case 'a': movement.left = true; break;
                 case 'd': movement.right = true; break;
                 case 'shift': movement.shift = true; break;
+                case 'f': // Debug: force figure to appear
+                    creepyFigure.forceAppear();
+                    console.log('Forced creepy figure to appear');
+                    break;
             }
         });
 
@@ -1186,6 +1191,356 @@
         const timerElement = document.getElementById('timer');
         const startTime = performance.now();
 
+        // ---------- Creepy Figure System ----------
+        class CreepyFigure {
+            constructor(scene, camera) {
+                this.scene = scene;
+                this.camera = camera;
+                this.figure = null;
+                this.mixer = null;
+                this.playerPosition = new THREE.Vector3();
+                this.raycaster = new THREE.Raycaster();
+                
+                // AI States: hunting, searching, stalking, approaching
+                this.state = 'hunting';
+                this.stateTimer = 0;
+                this.position = new THREE.Vector3();
+                this.targetPosition = new THREE.Vector3();
+                this.velocity = new THREE.Vector3();
+                this.lastKnownPlayerPosition = new THREE.Vector3();
+                
+                // Behavior parameters
+                this.huntingSpeed = 6;
+                this.searchSpeed = 3;
+                this.stalkSpeed = 2;
+                this.detectionRange = 50;
+                this.loseTrackTime = 8; // Seconds before giving up search
+                this.canSeePlayer = false;
+                this.timeSinceLastSeen = 0;
+                
+                this.loadModel();
+            }
+            
+            loadModel() {
+                const loader = new THREE.GLTFLoader();
+                
+                loader.load('creep.glb', (gltf) => {
+                    this.figure = gltf.scene;
+                    
+                    // Setup model properties
+                    this.figure.scale.setScalar(2.0); // Make it bigger and more imposing
+                    this.figure.castShadow = true;
+                    this.figure.receiveShadow = true;
+                    
+                    // Make materials darker/creepier
+                    this.figure.traverse((child) => {
+                        if (child.isMesh) {
+                            child.castShadow = true;
+                            child.receiveShadow = true;
+                            
+                            if (child.material) {
+                                // Make it much darker and more menacing
+                                child.material.color.multiplyScalar(0.1);
+                                child.material.emissive.setHex(0x110000); // Slight red glow
+                            }
+                        }
+                    });
+                    
+                    // Setup animations if available
+                    if (gltf.animations && gltf.animations.length > 0) {
+                        this.mixer = new THREE.AnimationMixer(this.figure);
+                        
+                        this.animations = {};
+                        gltf.animations.forEach((clip) => {
+                            this.animations[clip.name] = this.mixer.clipAction(clip);
+                        });
+                    }
+                    
+                    // Start at random position
+                    this.spawnAtRandomLocation();
+                    this.scene.add(this.figure);
+                    
+                    console.log('🔥 Creepy figure loaded and hunting begins!');
+                }, 
+                (progress) => {
+                    console.log('Loading creep.glb:', Math.round(progress.loaded / progress.total * 100) + '%');
+                },
+                (error) => {
+                    console.error('❌ Failed to load creep.glb:', error);
+                    console.log('📁 Make sure creep.glb is in the same folder as index.html');
+                    this.createFallbackFigure();
+                });
+            }
+            
+            createFallbackFigure() {
+                console.log('🔧 Creating fallback creepy figure...');
+                const group = new THREE.Group();
+                
+                // Body - taller and more menacing
+                const bodyGeometry = new THREE.CylinderGeometry(0.4, 0.5, 2.2, 8);
+                const bodyMaterial = new THREE.MeshLambertMaterial({ 
+                    color: 0x0a0a0a,
+                    emissive: 0x110000
+                });
+                const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+                body.position.y = 1.1;
+                body.castShadow = true;
+                group.add(body);
+                
+                // Head - more angular and scary
+                const headGeometry = new THREE.BoxGeometry(0.4, 0.4, 0.4);
+                const headMaterial = new THREE.MeshLambertMaterial({ 
+                    color: 0x1a1a1a,
+                    emissive: 0x220000
+                });
+                const head = new THREE.Mesh(headGeometry, headMaterial);
+                head.position.y = 2.6;
+                head.castShadow = true;
+                group.add(head);
+                
+                // Glowing red eyes
+                const eyeGeometry = new THREE.SphereGeometry(0.05, 6, 6);
+                const eyeMaterial = new THREE.MeshBasicMaterial({ 
+                    color: 0xff0000,
+                    emissive: 0xff0000,
+                    emissiveIntensity: 1.0
+                });
+                
+                const leftEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+                leftEye.position.set(-0.1, 2.7, 0.15);
+                group.add(leftEye);
+                
+                const rightEye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+                rightEye.position.set(0.1, 2.7, 0.15);
+                group.add(rightEye);
+                
+                // Arms for more menacing silhouette
+                const armGeometry = new THREE.CylinderGeometry(0.1, 0.15, 1.5, 6);
+                const armMaterial = new THREE.MeshLambertMaterial({ color: 0x0a0a0a });
+                
+                const leftArm = new THREE.Mesh(armGeometry, armMaterial);
+                leftArm.position.set(-0.6, 1.5, 0);
+                leftArm.rotation.z = 0.3;
+                leftArm.castShadow = true;
+                group.add(leftArm);
+                
+                const rightArm = new THREE.Mesh(armGeometry, armMaterial);
+                rightArm.position.set(0.6, 1.5, 0);
+                rightArm.rotation.z = -0.3;
+                rightArm.castShadow = true;
+                group.add(rightArm);
+                
+                this.figure = group;
+                this.spawnAtRandomLocation();
+                this.scene.add(this.figure);
+                
+                console.log('✅ Fallback creepy figure created');
+            }
+            
+            spawnAtRandomLocation() {
+                const angle = Math.random() * Math.PI * 2;
+                const distance = 30 + Math.random() * 20;
+                this.position.set(
+                    Math.cos(angle) * distance,
+                    0,
+                    Math.sin(angle) * distance
+                );
+                if (this.figure) {
+                    this.figure.position.copy(this.position);
+                }
+            }
+            
+            // Check if creep can see player (line of sight)
+            checkLineOfSight(creepPos, playerPos) {
+                const direction = playerPos.clone().sub(creepPos).normalize();
+                const distance = creepPos.distanceTo(playerPos);
+                
+                // Set raycaster from creep position towards player
+                this.raycaster.set(creepPos.clone().add(new THREE.Vector3(0, 1, 0)), direction);
+                
+                // Check for intersections with trees and obstacles
+                const obstacles = [];
+                
+                // Add trees as obstacles
+                for (const [key, treeData] of treeGrid.entries()) {
+                    if (trees.has(key)) {
+                        const tree = trees.get(key).mesh;
+                        tree.traverse((child) => {
+                            if (child.isMesh) {
+                                obstacles.push(child);
+                            }
+                        });
+                    }
+                }
+                
+                // Add rocks as obstacles
+                for (const [key, rock] of rocks.entries()) {
+                    obstacles.push(rock);
+                }
+                
+                const intersects = this.raycaster.intersectObjects(obstacles);
+                
+                // If there's an obstacle between creep and player, can't see
+                if (intersects.length > 0 && intersects[0].distance < distance - 2) {
+                    return false;
+                }
+                
+                return distance <= this.detectionRange;
+            }
+            
+            update(deltaTime, playerPosition) {
+                if (!this.figure) return;
+                
+                this.playerPosition.copy(playerPosition);
+                this.stateTimer += deltaTime;
+                
+                const distanceToPlayer = this.position.distanceTo(this.playerPosition);
+                
+                // Check line of sight
+                this.canSeePlayer = this.checkLineOfSight(this.position, this.playerPosition);
+                
+                if (this.canSeePlayer) {
+                    this.timeSinceLastSeen = 0;
+                    this.lastKnownPlayerPosition.copy(this.playerPosition);
+                } else {
+                    this.timeSinceLastSeen += deltaTime;
+                }
+                
+                // Always face the direction of movement or player
+                let lookTarget = this.targetPosition;
+                if (this.canSeePlayer) {
+                    lookTarget = this.playerPosition;
+                }
+                this.figure.lookAt(lookTarget);
+                
+                switch (this.state) {
+                    case 'hunting':
+                        if (this.canSeePlayer) {
+                            // Direct pursuit
+                            this.targetPosition.copy(this.playerPosition);
+                            this.state = 'stalking';
+                            console.log('👁️ Creep spotted you! Now stalking...');
+                        } else {
+                            // Patrol randomly
+                            if (this.position.distanceTo(this.targetPosition) < 3 || this.stateTimer > 5) {
+                                this.targetPosition = this.getRandomPatrolPoint();
+                                this.stateTimer = 0;
+                            }
+                            this.moveTowards(this.targetPosition, this.huntingSpeed * 0.5, deltaTime);
+                        }
+                        break;
+                        
+                    case 'stalking':
+                        if (this.canSeePlayer) {
+                            // Move towards player aggressively
+                            this.targetPosition.copy(this.playerPosition);
+                            this.moveTowards(this.targetPosition, this.stalkSpeed, deltaTime);
+                            
+                            // If too close, switch to approaching
+                            if (distanceToPlayer < 8) {
+                                this.state = 'approaching';
+                                console.log('🏃 Creep is approaching fast!');
+                            }
+                        } else {
+                            // Lost sight, go to last known position
+                            this.state = 'searching';
+                            this.targetPosition.copy(this.lastKnownPlayerPosition);
+                            console.log('❓ Creep lost sight, searching last known position...');
+                        }
+                        break;
+                        
+                    case 'approaching':
+                        if (this.canSeePlayer) {
+                            // Fast approach
+                            this.targetPosition.copy(this.playerPosition);
+                            this.moveTowards(this.targetPosition, this.huntingSpeed, deltaTime);
+                            
+                            // Game over if too close
+                            if (distanceToPlayer < 3) {
+                                console.log('💀 GAME OVER - The creep caught you!');
+                                // You could add game over logic here
+                            }
+                        } else {
+                            // Lost sight during approach, search more aggressively
+                            this.state = 'searching';
+                            this.targetPosition.copy(this.lastKnownPlayerPosition);
+                        }
+                        break;
+                        
+                    case 'searching':
+                        // Move to last known position
+                        this.moveTowards(this.targetPosition, this.searchSpeed, deltaTime);
+                        
+                        if (this.canSeePlayer) {
+                            // Found player again
+                            this.state = 'stalking';
+                            console.log('👁️ Creep found you again!');
+                        } else if (this.timeSinceLastSeen > this.loseTrackTime) {
+                            // Give up search, return to hunting
+                            this.state = 'hunting';
+                            this.targetPosition = this.getRandomPatrolPoint();
+                            console.log('🔍 Creep gave up search, back to hunting...');
+                        }
+                        break;
+                }
+                
+                // Update animations
+                if (this.mixer) {
+                    this.mixer.update(deltaTime);
+                    
+                    if (this.animations) {
+                        Object.values(this.animations).forEach(action => action.stop());
+                        
+                        const speed = this.velocity.length();
+                        if (speed > 4 && this.animations.run) {
+                            this.animations.run.play();
+                        } else if (speed > 1 && this.animations.walk) {
+                            this.animations.walk.play();
+                        } else if (this.animations.idle) {
+                            this.animations.idle.play();
+                        }
+                    }
+                }
+            }
+            
+            moveTowards(target, speed, deltaTime) {
+                const direction = target.clone().sub(this.position);
+                const distance = direction.length();
+                
+                if (distance > 0.5) {
+                    direction.normalize();
+                    this.velocity.copy(direction).multiplyScalar(speed);
+                    this.position.add(this.velocity.clone().multiplyScalar(deltaTime));
+                    this.figure.position.copy(this.position);
+                }
+            }
+            
+            getRandomPatrolPoint() {
+                const angle = Math.random() * Math.PI * 2;
+                const distance = 20 + Math.random() * 30;
+                return new THREE.Vector3(
+                    this.playerPosition.x + Math.cos(angle) * distance,
+                    0,
+                    this.playerPosition.z + Math.sin(angle) * distance
+                );
+            }
+            
+            // Debug method
+            forceAppear() {
+                if (this.figure) {
+                    this.state = 'stalking';
+                    this.stateTimer = 0;
+                    this.position.copy(this.playerPosition).add(new THREE.Vector3(10, 0, 10));
+                    this.figure.position.copy(this.position);
+                    this.figure.visible = true;
+                    console.log('🔧 Forced creep to appear and stalk');
+                }
+            }
+        }
+
+        // Initialize the creepy figure
+        const creepyFigure = new CreepyFigure(scene, camera);
+
         // ---------- Lightning Manager ----------
         class LightingManager {
             constructor(renderer, light) {
@@ -1273,6 +1628,9 @@
                 const secs = elapsed % 60;
                 timerElement.textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
             }
+            
+            // Update creepy figure
+            creepyFigure.update(delta, cameraGroup.position);
             
             // Update camera rotation from mouse
             camera.rotation.order = 'YXZ';
@@ -1488,4 +1846,5 @@
         animate();
     </script>
 </body>
+</html>
 </html>

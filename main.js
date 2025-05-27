@@ -996,6 +996,35 @@ function getGlobalScreamBuffer(audioContext) {
     })
 }
 
+// Global model loading queue to prevent simultaneous loads
+let modelLoadingQueue = []
+let isLoadingModel = false
+
+function queueModelLoad(creeper) {
+    modelLoadingQueue.push(creeper)
+    processModelQueue()
+}
+
+function processModelQueue() {
+    if (isLoadingModel || modelLoadingQueue.length === 0) return
+    
+    isLoadingModel = true
+    const nextCreeper = modelLoadingQueue.shift()
+    
+    console.log(`🔄 Loading model for creeper #${nextCreeper.id || 'main'} (${modelLoadingQueue.length} remaining in queue)`)
+    
+    // Start loading this creeper's model
+    nextCreeper.loadModelNow()
+}
+
+function onModelLoadComplete() {
+    isLoadingModel = false
+    // Process next in queue after a small delay to prevent performance spikes
+    setTimeout(() => {
+        processModelQueue()
+    }, 100) // 100ms delay between model loads
+}
+
 // Audio system
 let audioInitialized = false
 let forestAudio = null
@@ -1038,7 +1067,7 @@ function updateHeartbeatSpeed() {
         // Map distance to heartbeat rate
         const maxDistance = 50 // Distance at which heartbeat is normal
         const minDistance = 5  // Distance at which heartbeat is fastest
-        const maxRate = 1.6    // Further reduced from 1.8 to 1.6 to prevent clipping
+        const maxRate = 3.6    // Further reduced from 1.8 to 1.6 to prevent clipping
         
         if (closestDistance >= maxDistance) {
             targetHeartbeatRate = baseHeartbeatRate
@@ -1205,7 +1234,7 @@ class CreepyFigure {
         this.minScreamDistance = 3  // Reduced from 5 to 3 units
         
         this.initScreamAudio()
-        this.loadModel()
+        this.queueModelLoad()
     }
     
     initScreamAudio() {
@@ -1599,7 +1628,7 @@ class CreepyFigure {
                 this.currentAction = null
                 this.previousAction = null
                 
-                console.log('🎬 Available animations:', gltf.animations.map(clip => clip.name))
+                // Removed animation logging to prevent performance spikes during model loading
                 
                 gltf.animations.forEach((clip) => {
                     const action = this.mixer.clipAction(clip)
@@ -1610,14 +1639,12 @@ class CreepyFigure {
                     action.setEffectiveWeight(1)
                 })
                 
-                // Debug: log all available animations with their original names
-                console.log('🎬 Animation mapping:')
-                gltf.animations.forEach((clip) => {
-                    console.log(`  "${clip.name}" -> "${clip.name.toLowerCase()}"`)
-                })
+                // Removed debug animation mapping logging to prevent performance spikes
                 
-                // Start with idle animation
-                this.playIdleAnimation()
+                // Defer animation initialization to prevent blocking
+                setTimeout(() => {
+                    this.playIdleAnimation()
+                }, 10) // Small delay to prevent performance spike
             } else {
                 console.log('⚠️ No animations found in runner.glb')
             }
@@ -1628,6 +1655,9 @@ class CreepyFigure {
             }
             
             console.log('🔥 Runner figure loaded and ready!')
+            
+            // Notify queue system that loading is complete
+            onModelLoadComplete()
         }, 
         (progress) => {
             // console.log('Loading runner.glb:', Math.round(progress.loaded / progress.total * 100) + '%')
@@ -1636,6 +1666,9 @@ class CreepyFigure {
             console.error('❌ Failed to load runner.glb:', error)
             console.log('📁 Make sure runner.glb is in the same folder as index.html')
             this.createFallbackFigure()
+            
+            // Notify queue system that loading is complete (even on error)
+            onModelLoadComplete()
         })
     }
     
@@ -2073,6 +2106,16 @@ class CreepyFigure {
             console.log('❌ No animations loaded')
             return []
         }
+    }
+    
+    queueModelLoad() {
+        // Add this creeper to the loading queue instead of loading immediately
+        queueModelLoad(this)
+    }
+    
+    loadModelNow() {
+        // This method is called by the queue system when it's this creeper's turn to load
+        this.loadModel()
     }
 }
 

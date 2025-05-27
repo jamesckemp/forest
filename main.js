@@ -947,6 +947,55 @@ function checkCollision(position) {
     return false
 }
 
+// Global shared audio buffer for screams (simpler approach)
+let globalScreamBuffer = null
+let isLoadingGlobalBuffer = false
+
+// Function to get or load the global scream buffer
+function getGlobalScreamBuffer(audioContext) {
+    return new Promise((resolve, reject) => {
+        // If we already have the buffer, return it immediately
+        if (globalScreamBuffer) {
+            resolve(globalScreamBuffer)
+            return
+        }
+        
+        // If already loading, wait for it
+        if (isLoadingGlobalBuffer) {
+            const checkBuffer = () => {
+                if (globalScreamBuffer) {
+                    resolve(globalScreamBuffer)
+                } else if (!isLoadingGlobalBuffer) {
+                    reject(new Error('Buffer loading failed'))
+                } else {
+                    setTimeout(checkBuffer, 100)
+                }
+            }
+            checkBuffer()
+            return
+        }
+        
+        // Start loading
+        isLoadingGlobalBuffer = true
+        console.log('🔄 Loading global scream buffer...')
+        
+        fetch('759456__akridiy__a-single-scream-of-a-young-male.wav')
+            .then(response => response.arrayBuffer())
+            .then(data => audioContext.decodeAudioData(data))
+            .then(buffer => {
+                globalScreamBuffer = buffer
+                isLoadingGlobalBuffer = false
+                console.log('✅ Global scream buffer loaded - will be reused by all creepers')
+                resolve(buffer)
+            })
+            .catch(error => {
+                isLoadingGlobalBuffer = false
+                console.log(`❌ Failed to load global scream buffer: ${error.message}`)
+                reject(error)
+            })
+    })
+}
+
 // Audio system
 let audioInitialized = false
 let forestAudio = null
@@ -955,7 +1004,7 @@ let currentHeartbeatRate = 1.0
 let targetHeartbeatRate = 1.0
 
 function updateHeartbeatSpeed() {
-    if (!forestAudio || forestAudio.paused) return
+    if (!forestAudio || forestAudio.paused || forestAudio.ended) return
     
     // Find the closest creeper to the player
     let closestDistance = Infinity
@@ -989,7 +1038,7 @@ function updateHeartbeatSpeed() {
         // Map distance to heartbeat rate
         const maxDistance = 50 // Distance at which heartbeat is normal
         const minDistance = 5  // Distance at which heartbeat is fastest
-        const maxRate = 2.5    // Maximum heartbeat speed multiplier
+        const maxRate = 1.6    // Further reduced from 1.8 to 1.6 to prevent clipping
         
         if (closestDistance >= maxDistance) {
             targetHeartbeatRate = baseHeartbeatRate
@@ -1003,20 +1052,37 @@ function updateHeartbeatSpeed() {
         }
     }
     
-    // Smooth transition to target rate
-    const transitionSpeed = 0.02 // How fast the heartbeat adjusts
-    if (Math.abs(currentHeartbeatRate - targetHeartbeatRate) > 0.01) {
+    // Use extremely gentle transitions to prevent any audio artifacts
+    const rateDifference = Math.abs(currentHeartbeatRate - targetHeartbeatRate)
+    
+    // Much smaller increments to prevent clipping
+    let transitionSpeed = 0.001 // Very small base increment
+    
+    if (Math.abs(currentHeartbeatRate - targetHeartbeatRate) > 0.001) {
         if (currentHeartbeatRate < targetHeartbeatRate) {
             currentHeartbeatRate = Math.min(targetHeartbeatRate, currentHeartbeatRate + transitionSpeed)
         } else {
             currentHeartbeatRate = Math.max(targetHeartbeatRate, currentHeartbeatRate - transitionSpeed)
         }
         
-        // Apply the new playback rate
-        forestAudio.playbackRate = currentHeartbeatRate
+        // Apply the new playback rate very conservatively
+        const clampedRate = Math.max(0.8, Math.min(1.8, currentHeartbeatRate))
+        
+        // Only change rate if the difference is meaningful and audio is stable
+        if (Math.abs(forestAudio.playbackRate - clampedRate) > 0.005) {
+            try {
+                forestAudio.playbackRate = clampedRate
+            } catch (error) {
+                // Fallback if playbackRate change fails
+                console.log('⚠️ Playback rate change failed, resetting to 1.0')
+                forestAudio.playbackRate = 1.0
+                currentHeartbeatRate = 1.0
+                targetHeartbeatRate = 1.0
+            }
+        }
         
         // Debug logging (uncomment to see heartbeat changes)
-        // console.log(`💓 Heartbeat: ${currentHeartbeatRate.toFixed(2)}x (closest creeper: ${closestDistance.toFixed(1)}m)`)
+        // console.log(`💓 Heartbeat: ${currentHeartbeatRate.toFixed(3)}x (target: ${targetHeartbeatRate.toFixed(3)}x, closest: ${closestDistance.toFixed(1)}m)`)
     }
 }
 
@@ -1026,7 +1092,7 @@ function initAudio() {
             if (!forestAudio) {
                 forestAudio = new Audio('410390__univ_lyon3__pantigny_jeanloup_2017_2018_heartbeatbreath.wav')
                 forestAudio.loop = true
-                forestAudio.volume = 0.6
+                forestAudio.volume = 1
                 
                 forestAudio.addEventListener('loadstart', () => console.log('Heartbeat/breath audio loading started'))
                 forestAudio.addEventListener('canplay', () => console.log('Heartbeat/breath audio can play'))
@@ -1134,9 +1200,9 @@ class CreepyFigure {
         this.minScreamInterval = 2 // Minimum seconds between screams
         this.maxScreamInterval = 5 // Maximum seconds between screams
         this.nextScreamTime = 0
-        this.baseScreamVolume = 0.6
-        this.maxScreamDistance = 30 // Distance at which scream is barely audible
-        this.minScreamDistance = 5 // Distance at which scream is at full volume
+        this.baseScreamVolume = 6.0 // Increased from 4.0 to 6.0
+        this.maxScreamDistance = 25 // Reduced from 30 to 25 units
+        this.minScreamDistance = 3  // Reduced from 5 to 3 units
         
         this.initScreamAudio()
         this.loadModel()
@@ -1144,31 +1210,93 @@ class CreepyFigure {
     
     initScreamAudio() {
         try {
-            // Initialize Web Audio API context
+            // Each creeper gets its own audio context (prevents context conflicts)
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)()
             
             // Create gain node for volume control
             this.gainNode = this.audioContext.createGain()
-            this.gainNode.connect(this.audioContext.destination)
             this.gainNode.gain.value = 0
             
-            // Load the scream audio file
-            fetch('759456__akridiy__a-single-scream-of-a-young-male.wav')
-                .then(response => response.arrayBuffer())
-                .then(data => this.audioContext.decodeAudioData(data))
+            // Create reverb effect
+            this.reverbNode = this.audioContext.createConvolver()
+            this.createReverbImpulse()
+            
+            // Create 3D panner for positional audio
+            this.pannerNode = this.audioContext.createPanner()
+            this.pannerNode.panningModel = 'HRTF'
+            this.pannerNode.distanceModel = 'inverse'
+            this.pannerNode.refDistance = 1
+            this.pannerNode.maxDistance = 25 // Reduced from 50 to match scream distance
+            this.pannerNode.rolloffFactor = 1.5 // Reduced from 2 for less aggressive falloff
+            this.pannerNode.coneInnerAngle = 360
+            this.pannerNode.coneOuterAngle = 0
+            this.pannerNode.coneOuterGain = 0
+            
+            // Create dry/wet mix for reverb
+            this.dryGain = this.audioContext.createGain()
+            this.wetGain = this.audioContext.createGain()
+            this.dryGain.gain.value = 0.7 // 70% dry signal
+            this.wetGain.gain.value = 0.3 // 30% wet (reverb) signal
+            
+            // Connect audio graph: source -> panner -> dry/wet split -> reverb -> gain -> destination
+            this.pannerNode.connect(this.dryGain)
+            this.pannerNode.connect(this.reverbNode)
+            this.reverbNode.connect(this.wetGain)
+            this.dryGain.connect(this.gainNode)
+            this.wetGain.connect(this.gainNode)
+            this.gainNode.connect(this.audioContext.destination)
+            
+            // Use global buffer (loads once, shared by all)
+            getGlobalScreamBuffer(this.audioContext)
                 .then(buffer => {
                     this.screamBuffer = buffer
-                    console.log(`✅ Scream audio loaded for creeper #${this.id || 'main'}`)
+                    console.log(`✅ Creeper #${this.id || 'main'} using global scream buffer`)
                 })
                 .catch(error => {
-                    console.log(`❌ Failed to load scream audio for creeper: ${error.message}`)
+                    console.log(`❌ Creeper #${this.id || 'main'} failed to get global buffer: ${error.message}`)
+                    // Fallback to individual loading if global fails
+                    this.loadIndividualBuffer()
                 })
             
         } catch (error) {
-            console.log('❌ Could not initialize Web Audio API:', error)
+            console.log(`❌ Creeper #${this.id || 'main'} Web Audio failed:`, error)
             // Fallback to simple audio if Web Audio API fails
             this.initFallbackAudio()
         }
+    }
+    
+    loadIndividualBuffer() {
+        // Fallback method - load individually if global buffer fails
+        fetch('759456__akridiy__a-single-scream-of-a-young-male.wav')
+            .then(response => response.arrayBuffer())
+            .then(data => this.audioContext.decodeAudioData(data))
+            .then(buffer => {
+                this.screamBuffer = buffer
+                console.log(`✅ Creeper #${this.id || 'main'} loaded individual buffer as fallback`)
+            })
+            .catch(error => {
+                console.log(`❌ Creeper #${this.id || 'main'} individual buffer failed: ${error.message}`)
+                this.initFallbackAudio()
+            })
+    }
+    
+    createReverbImpulse() {
+        // Create a reverb impulse response for a medium-sized creepy space
+        const sampleRate = this.audioContext.sampleRate
+        const length = sampleRate * 2.5 // 2.5 seconds of reverb
+        const impulse = this.audioContext.createBuffer(2, length, sampleRate)
+        
+        for (let channel = 0; channel < 2; channel++) {
+            const channelData = impulse.getChannelData(channel)
+            for (let i = 0; i < length; i++) {
+                // Create exponential decay with some randomness for natural reverb
+                const decay = Math.pow(1 - i / length, 2.5)
+                const noise = (Math.random() * 2 - 1) * 0.1
+                channelData[i] = (noise * decay) * (Math.random() < 0.3 ? 1 : 0.3)
+            }
+        }
+        
+        this.reverbNode.buffer = impulse
     }
     
     initFallbackAudio() {
@@ -1210,7 +1338,7 @@ class CreepyFigure {
         }
         
         // Add slight volume variation
-        const volumeVariation = 0.8 + Math.random() * 0.4
+        const volumeVariation = 0.95 + Math.random() * 0.1 // Changed from 0.8-1.2 to 0.95-1.05 range
         volume *= volumeVariation
         
         // Only play if volume is audible
@@ -1245,11 +1373,55 @@ class CreepyFigure {
             const pitchCents = Math.log2(pitchVariation) * 1200
             this.screamSource.detune.value = pitchCents
             
-            // Set volume
-            this.gainNode.gain.value = Math.max(0, Math.min(1, volume))
+            // Set 3D position of the scream source
+            if (this.pannerNode) {
+                this.pannerNode.setPosition(this.position.x, this.position.y + 1, this.position.z)
+                
+                // Set listener position (player position)
+                if (this.audioContext.listener.setPosition) {
+                    this.audioContext.listener.setPosition(
+                        this.playerPosition.x, 
+                        this.playerPosition.y, 
+                        this.playerPosition.z
+                    )
+                } else {
+                    // Fallback for older browsers
+                    this.audioContext.listener.positionX.value = this.playerPosition.x
+                    this.audioContext.listener.positionY.value = this.playerPosition.y
+                    this.audioContext.listener.positionZ.value = this.playerPosition.z
+                }
+                
+                // Set listener orientation (facing direction)
+                const camera = this.scene.getObjectByName ? this.scene.getObjectByName('camera') : null
+                if (camera || this.camera) {
+                    const cam = camera || this.camera
+                    const forward = new THREE.Vector3(0, 0, -1)
+                    forward.applyQuaternion(cam.quaternion)
+                    const up = new THREE.Vector3(0, 1, 0)
+                    up.applyQuaternion(cam.quaternion)
+                    
+                    if (this.audioContext.listener.setOrientation) {
+                        this.audioContext.listener.setOrientation(
+                            forward.x, forward.y, forward.z,
+                            up.x, up.y, up.z
+                        )
+                    } else {
+                        // Fallback for older browsers
+                        this.audioContext.listener.forwardX.value = forward.x
+                        this.audioContext.listener.forwardY.value = forward.y
+                        this.audioContext.listener.forwardZ.value = forward.z
+                        this.audioContext.listener.upX.value = up.x
+                        this.audioContext.listener.upY.value = up.y
+                        this.audioContext.listener.upZ.value = up.z
+                    }
+                }
+            }
             
-            // Connect audio graph
-            this.screamSource.connect(this.gainNode)
+            // Set volume
+            this.gainNode.gain.value = Math.max(0, volume) // Removed Math.min(1, volume) clamp
+            
+            // Connect to the new audio graph (source -> panner -> reverb/dry mix -> gain -> destination)
+            this.screamSource.connect(this.pannerNode)
             
             // Handle scream end
             this.screamSource.onended = () => {
@@ -1271,7 +1443,14 @@ class CreepyFigure {
                             pitchVariation > 1.4 ? 'SHRILL' : 
                             pitchVariation < 1.0 ? 'low' : 'high'
             
-            console.log(`👹 Creeper #${this.id || 'main'} screaming: Speed ${speedVariation.toFixed(2)}x (${speedDesc}), Pitch ${pitchVariation.toFixed(2)}x (${pitchDesc}), Volume ${volume.toFixed(2)}`)
+            // Calculate direction for logging
+            const direction = this.position.clone().sub(this.playerPosition).normalize()
+            const angle = Math.atan2(direction.x, direction.z) * 180 / Math.PI
+            const directionDesc = angle > -45 && angle <= 45 ? 'FRONT' :
+                                angle > 45 && angle <= 135 ? 'RIGHT' :
+                                angle > 135 || angle <= -135 ? 'BEHIND' : 'LEFT'
+            
+            console.log(`👹 Creeper #${this.id || 'main'} screaming: Speed ${speedVariation.toFixed(2)}x (${speedDesc}), Pitch ${pitchVariation.toFixed(2)}x (${pitchDesc}), Volume ${volume.toFixed(2)}, Direction: ${directionDesc}`)
             
         } catch (error) {
             console.log('❌ Error playing Web Audio scream:', error)
@@ -1323,6 +1502,25 @@ class CreepyFigure {
     updateScreamAudio() {
         if (!this.isScreaming) return
         
+        // Update 3D position of the scream source
+        if (this.pannerNode && this.audioContext) {
+            this.pannerNode.setPosition(this.position.x, this.position.y + 1, this.position.z)
+            
+            // Update listener position (player position)
+            if (this.audioContext.listener.setPosition) {
+                this.audioContext.listener.setPosition(
+                    this.playerPosition.x, 
+                    this.playerPosition.y, 
+                    this.playerPosition.z
+                )
+            } else {
+                // Fallback for older browsers
+                this.audioContext.listener.positionX.value = this.playerPosition.x
+                this.audioContext.listener.positionY.value = this.playerPosition.y
+                this.audioContext.listener.positionZ.value = this.playerPosition.z
+            }
+        }
+        
         // Update volume based on current distance
         const distanceToPlayer = this.position.distanceTo(this.playerPosition)
         let volume = 0
@@ -1337,9 +1535,9 @@ class CreepyFigure {
         
         // Apply volume
         if (this.gainNode) {
-            this.gainNode.gain.value = Math.max(0, Math.min(1, volume))
+            this.gainNode.gain.value = Math.max(0, volume) // Removed Math.min(1, volume) clamp
         } else if (this.screamAudio) {
-            this.screamAudio.volume = Math.max(0, Math.min(1, volume))
+            this.screamAudio.volume = Math.max(0, Math.min(1, volume)) // Keep clamp for fallback audio
         }
         
         // Stop scream if player gets too close (creeper caught them)

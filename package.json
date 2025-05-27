@@ -1,0 +1,28 @@
+{
+  "name": "black-smoke-survival",
+  "version": "1.0.0",
+  "description": "A horror survival game built with Three.js where you must hide from a creepy figure in a dark forest",
+  "main": "index.html",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "serve": "http-server . -p 3000 -c-1"
+  },
+  "keywords": [
+    "threejs",
+    "horror",
+    "survival",
+    "game",
+    "webgl"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "vite": "^5.0.0",
+    "http-server": "^14.1.1"
+  },
+  "dependencies": {
+    "three": "^0.128.0"
+  }
+} 

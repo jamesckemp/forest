@@ -6,6 +6,14 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
 import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 
+// Load minimap module
+const minimapScript = document.createElement('script')
+minimapScript.src = './minimap.js'
+document.head.appendChild(minimapScript)
+
+// Test creeper for minimap debugging
+let testCreeper = null
+
 // Scene setup
 const scene = new THREE.Scene()
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000)
@@ -2320,12 +2328,14 @@ initializeCreepers(0, 10)
 
 // ---------- Lightning Manager ----------
 class LightingManager {
-    constructor(renderer, light) {
+    constructor(renderer, light, minimap = null) {
         this.renderer = renderer
         this.light = light
+        this.minimap = minimap
         this.baseExposure = renderer.toneMappingExposure
         this.timeToNextFlash = this._randGap()
         this.sequence = null
+        this.wasLightningActive = false
     }
 
     _randGap() { return Math.random() * 7 + 5 }
@@ -2345,6 +2355,8 @@ class LightingManager {
     }
 
     update(dt) {
+        const isLightningActive = this.sequence !== null
+        
         if (this.sequence) {
             this.sequence.time += dt
             const seq = this.sequence
@@ -2355,6 +2367,12 @@ class LightingManager {
                 const expoBoost = current.intensity * ramp
                 this.light.intensity = current.intensity * ramp
                 this.renderer.toneMappingExposure = this.baseExposure + expoBoost
+                
+                // Trigger minimap reveal on first pulse of lightning
+                if (!this.wasLightningActive && this.minimap) {
+                    const creeperPositions = this.minimap.getCreeperPositions(creepyFigure, creepers)
+                    this.minimap.onLightningFlash(creeperPositions)
+                }
             } else {
                 this.light.intensity = 0
                 this.renderer.toneMappingExposure = this.baseExposure
@@ -2365,18 +2383,56 @@ class LightingManager {
                 this.light.intensity = 0
                 this.renderer.toneMappingExposure = this.baseExposure
                 this.timeToNextFlash = this._randGap()
+                
+                // Notify minimap that lightning ended
+                if (this.minimap) {
+                    this.minimap.onLightningEnd()
+                }
             }
-            return
+        } else {
+            this.timeToNextFlash -= dt
+            if (this.timeToNextFlash <= 0) {
+                this.sequence = this._buildFlashSequence()
+            }
         }
-
-        this.timeToNextFlash -= dt
-        if (this.timeToNextFlash <= 0) {
-            this.sequence = this._buildFlashSequence()
-        }
+        
+        this.wasLightningActive = isLightningActive
+    }
+    
+    setMinimap(minimap) {
+        this.minimap = minimap
     }
 }
 
-const lightingManager = new LightingManager(renderer, lightningLight)
+// Initialize minimap when script loads
+let minimap = null
+let lightingManager = null
+
+// Wait for minimap script to load
+minimapScript.onload = () => {
+    if (window.Minimap) {
+        minimap = new window.Minimap()
+        console.log('📡 Minimap created and ready')
+        
+        // Initialize lighting manager with minimap
+        lightingManager = new LightingManager(renderer, lightningLight, minimap)
+    } else {
+        console.log('❌ Minimap class not found after script load')
+        // Fallback without minimap
+        lightingManager = new LightingManager(renderer, lightningLight)
+    }
+}
+
+// Fallback if script fails to load
+minimapScript.onerror = () => {
+    console.log('❌ Failed to load minimap script, continuing without minimap')
+    lightingManager = new LightingManager(renderer, lightningLight)
+}
+
+// Initialize without minimap if script hasn't loaded yet
+if (!lightingManager) {
+    lightingManager = new LightingManager(renderer, lightningLight)
+}
 
 // Three.js clock for variable delta
 const clock = new THREE.Clock()
@@ -2500,6 +2556,53 @@ document.addEventListener('keydown', (e) => {
                 console.log('💓 No heartbeat audio loaded')
             }
             break
+        case 'm': // Debug: test minimap lightning reveal
+            if (minimap) {
+                console.log('📡 Testing minimap lightning reveal...')
+                const creeperPositions = minimap.getCreeperPositions(creepyFigure, creepers)
+                minimap.onLightningFlash(creeperPositions)
+                console.log(`⚡ Manually revealed ${creeperPositions.size} creepers on radar`)
+            } else {
+                console.log('❌ Minimap not available')
+            }
+            break
+        case 'n': // Debug: test minimap orientation
+            if (minimap) {
+                console.log('🧭 Testing minimap orientation...')
+                console.log(`Player position: (${cameraGroup.position.x.toFixed(1)}, ${cameraGroup.position.z.toFixed(1)})`)
+                console.log(`Player rotation: ${(camera.rotation.y * 180 / Math.PI).toFixed(1)}°`)
+                
+                // Create a test creeper position directly in front of the player
+                // Use the same forward calculation as the movement system
+                const testDistance = 20
+                const forward = new THREE.Vector3(0, 0, -1)
+                forward.applyQuaternion(camera.quaternion)
+                forward.y = 0
+                forward.normalize()
+                
+                const forwardX = cameraGroup.position.x + forward.x * testDistance
+                const forwardZ = cameraGroup.position.z + forward.z * testDistance
+                
+                console.log(`Forward vector: (${forward.x.toFixed(3)}, ${forward.z.toFixed(3)})`)
+                console.log(`Test creeper position (should appear above player): (${forwardX.toFixed(1)}, ${forwardZ.toFixed(1)})`)
+                
+                // Create or update test creeper object
+                testCreeper = {
+                    id: 'test',
+                    position: { x: forwardX, z: forwardZ },
+                    figure: true // Fake figure to pass the existence check
+                }
+                
+                // Add test creeper to minimap
+                const testPositions = new Map()
+                testPositions.set('test', { x: forwardX, z: forwardZ })
+                minimap.onLightningFlash(testPositions)
+                
+                console.log('⚡ Added test creeper directly in front of player - should appear at top of minimap')
+            } else {
+                console.log('❌ Minimap not available')
+            }
+            break
     }
 })
 
@@ -2521,13 +2624,21 @@ function animate() {
     time += delta
     
     // Update lightning & survival timer
-    lightingManager.update(delta)
+    if (lightingManager) {
+        lightingManager.update(delta)
+    }
 
     if (timerElement) {
         const elapsed = Math.floor((performance.now() - startTime) / 1000)
         const mins = Math.floor(elapsed / 60)
         const secs = elapsed % 60
         timerElement.textContent = `${mins}:${secs.toString().padStart(2, '0')}`
+    }
+    
+    // Update minimap
+    if (minimap) {
+        minimap.updatePlayerPosition(cameraGroup.position.x, cameraGroup.position.z, camera.rotation.y)
+        minimap.update(creepyFigure, creepers)
     }
     
     // Update creepy figure

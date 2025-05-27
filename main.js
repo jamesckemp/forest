@@ -950,68 +950,99 @@ function checkCollision(position) {
 // Audio system
 let audioInitialized = false
 let forestAudio = null
-let ambientAudio = null
+let baseHeartbeatRate = 1.0 // Normal heartbeat speed
+let currentHeartbeatRate = 1.0
+let targetHeartbeatRate = 1.0
 
-function fadeOutAmbient() {
-    if (!ambientAudio || ambientAudio.paused) return
+function updateHeartbeatSpeed() {
+    if (!forestAudio || forestAudio.paused) return
     
-    const fadeStep = 0.005
-    const fadeInterval = 100
+    // Find the closest creeper to the player
+    let closestDistance = Infinity
+    const playerPos = cameraGroup.position
     
-    const fade = setInterval(() => {
-        if (ambientAudio.volume > fadeStep) {
-            ambientAudio.volume -= fadeStep
-        } else {
-            ambientAudio.volume = 0
-            ambientAudio.pause()
-            clearInterval(fade)
-            console.log('🎵 Ambient music faded out completely')
+    // Check main creepy figure
+    if (creepyFigure && creepyFigure.position) {
+        const distance = Math.sqrt(
+            Math.pow(creepyFigure.position.x - playerPos.x, 2) + 
+            Math.pow(creepyFigure.position.z - playerPos.z, 2)
+        )
+        closestDistance = Math.min(closestDistance, distance)
+    }
+    
+    // Check all other creepers
+    for (const [key, creeper] of creepers.entries()) {
+        if (creeper && creeper.position) {
+            const distance = Math.sqrt(
+                Math.pow(creeper.position.x - playerPos.x, 2) + 
+                Math.pow(creeper.position.z - playerPos.z, 2)
+            )
+            closestDistance = Math.min(closestDistance, distance)
         }
-    }, fadeInterval)
+    }
+    
+    // Calculate target heartbeat rate based on closest distance
+    if (closestDistance === Infinity) {
+        // No creepers nearby - normal heartbeat
+        targetHeartbeatRate = baseHeartbeatRate
+    } else {
+        // Map distance to heartbeat rate
+        const maxDistance = 50 // Distance at which heartbeat is normal
+        const minDistance = 5  // Distance at which heartbeat is fastest
+        const maxRate = 2.5    // Maximum heartbeat speed multiplier
+        
+        if (closestDistance >= maxDistance) {
+            targetHeartbeatRate = baseHeartbeatRate
+        } else if (closestDistance <= minDistance) {
+            targetHeartbeatRate = baseHeartbeatRate * maxRate
+        } else {
+            // Linear interpolation between min and max
+            const normalizedDistance = (closestDistance - minDistance) / (maxDistance - minDistance)
+            const rateMultiplier = maxRate - (normalizedDistance * (maxRate - 1))
+            targetHeartbeatRate = baseHeartbeatRate * rateMultiplier
+        }
+    }
+    
+    // Smooth transition to target rate
+    const transitionSpeed = 0.02 // How fast the heartbeat adjusts
+    if (Math.abs(currentHeartbeatRate - targetHeartbeatRate) > 0.01) {
+        if (currentHeartbeatRate < targetHeartbeatRate) {
+            currentHeartbeatRate = Math.min(targetHeartbeatRate, currentHeartbeatRate + transitionSpeed)
+        } else {
+            currentHeartbeatRate = Math.max(targetHeartbeatRate, currentHeartbeatRate - transitionSpeed)
+        }
+        
+        // Apply the new playback rate
+        forestAudio.playbackRate = currentHeartbeatRate
+        
+        // Debug logging (uncomment to see heartbeat changes)
+        // console.log(`💓 Heartbeat: ${currentHeartbeatRate.toFixed(2)}x (closest creeper: ${closestDistance.toFixed(1)}m)`)
+    }
 }
 
 function initAudio() {
     if (!audioInitialized) {
         try {
             if (!forestAudio) {
-                forestAudio = new Audio('forest.wav')
+                forestAudio = new Audio('410390__univ_lyon3__pantigny_jeanloup_2017_2018_heartbeatbreath.wav')
                 forestAudio.loop = true
                 forestAudio.volume = 0.6
                 
-                forestAudio.addEventListener('loadstart', () => console.log('Forest audio loading started'))
-                forestAudio.addEventListener('canplay', () => console.log('Forest audio can play'))
-                forestAudio.addEventListener('playing', () => console.log('Forest audio is now playing'))
-                forestAudio.addEventListener('error', (e) => console.log('Forest audio error:', e))
+                forestAudio.addEventListener('loadstart', () => console.log('Heartbeat/breath audio loading started'))
+                forestAudio.addEventListener('canplay', () => console.log('Heartbeat/breath audio can play'))
+                forestAudio.addEventListener('playing', () => console.log('Heartbeat/breath audio is now playing'))
+                forestAudio.addEventListener('error', (e) => console.log('Heartbeat/breath audio error:', e))
             }
             
-            if (!ambientAudio) {
-                ambientAudio = new Audio('ambient.wav')
-                ambientAudio.loop = false
-                ambientAudio.volume = 0.375
-                
-                ambientAudio.addEventListener('loadstart', () => console.log('Ambient audio loading started'))
-                ambientAudio.addEventListener('canplay', () => console.log('Ambient audio can play'))
-                ambientAudio.addEventListener('playing', () => console.log('Ambient audio is now playing'))
-                ambientAudio.addEventListener('error', (e) => console.log('Ambient audio error:', e))
-                
-                setTimeout(() => {
-                    if (ambientAudio && !ambientAudio.paused) {
-                        fadeOutAmbient()
-                    }
-                }, 30000)
-            }
+            // Removed ambient audio initialization
             
-            Promise.all([
-                forestAudio.play(),
-                ambientAudio.play()
-            ]).then(() => {
-                console.log('✅ Both forest and ambient audio successfully started!')
+            forestAudio.play().then(() => {
+                console.log('✅ Heartbeat/breath audio successfully started!')
                 audioInitialized = true
                 removeAudioListeners()
             }).catch(e => {
                 console.log('❌ Audio play failed:', e.message)
-                forestAudio.play().catch(e => console.log('Forest audio failed:', e.message))
-                ambientAudio.play().catch(e => console.log('Ambient audio failed:', e.message))
+                forestAudio.play().catch(e => console.log('Heartbeat/breath audio failed:', e.message))
             })
             
         } catch (error) {
@@ -1023,7 +1054,7 @@ function initAudio() {
 initAudio()
 
 function tryStartAudio() {
-    if (audioInitialized || (forestAudio && !forestAudio.paused && ambientAudio && !ambientAudio.paused)) {
+    if (audioInitialized || (forestAudio && !forestAudio.paused)) {
         console.log('🎵 Audio already playing - ignoring interaction')
         removeAudioListeners()
         return
@@ -1041,12 +1072,12 @@ function removeAudioListeners() {
         document.removeEventListener('click', tryStartAudio)
         document.removeEventListener('keydown', tryStartAudio)
         document.removeEventListener('touchstart', tryStartAudio)
-        console.log('🎵 Audio listeners removed - ambience is playing')
+        console.log('🎵 Audio listeners removed - heartbeat/breath is playing')
     }
 }
 
 setInterval(() => {
-    if (forestAudio && !forestAudio.paused && ambientAudio && !ambientAudio.paused && !audioInitialized) {
+    if (forestAudio && !forestAudio.paused && !audioInitialized) {
         audioInitialized = true
         removeAudioListeners()
     }
@@ -2190,6 +2221,44 @@ document.addEventListener('keydown', (e) => {
             const anims3 = creepyFigure.listAnimations()
             if (anims3.length > 2) creepyFigure.testAnimation(anims3[2])
             break
+        case 'b': // Debug: toggle heartbeat logging and show status
+            if (forestAudio) {
+                console.log(`💓 Current heartbeat rate: ${currentHeartbeatRate.toFixed(2)}x`)
+                console.log(`💓 Target heartbeat rate: ${targetHeartbeatRate.toFixed(2)}x`)
+                console.log(`💓 Audio playing: ${!forestAudio.paused}`)
+                console.log(`💓 Audio playback rate: ${forestAudio.playbackRate.toFixed(2)}x`)
+                
+                // Find closest creeper for context
+                let closestDistance = Infinity
+                const playerPos = cameraGroup.position
+                
+                if (creepyFigure && creepyFigure.position) {
+                    const distance = Math.sqrt(
+                        Math.pow(creepyFigure.position.x - playerPos.x, 2) + 
+                        Math.pow(creepyFigure.position.z - playerPos.z, 2)
+                    )
+                    closestDistance = Math.min(closestDistance, distance)
+                }
+                
+                for (const [key, creeper] of creepers.entries()) {
+                    if (creeper && creeper.position) {
+                        const distance = Math.sqrt(
+                            Math.pow(creeper.position.x - playerPos.x, 2) + 
+                            Math.pow(creeper.position.z - playerPos.z, 2)
+                        )
+                        closestDistance = Math.min(closestDistance, distance)
+                    }
+                }
+                
+                if (closestDistance === Infinity) {
+                    console.log(`💓 Closest creeper: None detected`)
+                } else {
+                    console.log(`💓 Closest creeper: ${closestDistance.toFixed(1)}m away`)
+                }
+            } else {
+                console.log('💓 No heartbeat audio loaded')
+            }
+            break
     }
 })
 
@@ -2243,6 +2312,9 @@ function animate() {
         
         creeper.update(delta, cameraGroup.position)
     }
+    
+    // Update dynamic heartbeat speed based on closest creeper
+    updateHeartbeatSpeed()
     
     // Update camera rotation from mouse
     camera.rotation.order = 'YXZ'

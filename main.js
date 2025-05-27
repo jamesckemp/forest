@@ -1111,6 +1111,12 @@ class CreepyFigure {
             const box = new THREE.Box3().setFromObject(this.figure)
             this.groundOffset = -box.min.y + 0.1 // Offset to put bottom of model on ground with small buffer
             
+            // Apply initial position if it was set before model loaded
+            if (this.position.length() > 0) {
+                this.figure.position.copy(this.position)
+                this.figure.position.y += this.groundOffset
+            }
+            
             // Make materials darker/creepier
             this.figure.traverse((child) => {
                 if (child.isMesh) {
@@ -1120,9 +1126,20 @@ class CreepyFigure {
                     if (child.material) {
                         child.material.color.setHex(0x050508) // Almost black with tiny hint of blue
                         child.material.emissive.setHex(0x000005) // Very subtle dark blue emissive
+                        
+                        // Apply fade-in properties if they were set before model loaded
+                        if (this.opacity !== undefined) {
+                            child.material.transparent = true
+                            child.material.opacity = this.opacity
+                        }
                     }
                 }
             })
+            
+            // Apply visibility if it was set before model loaded
+            if (this.initiallyVisible !== undefined) {
+                this.figure.visible = this.initiallyVisible
+            }
             
             // Setup animations if available
             if (gltf.animations && gltf.animations.length > 0) {
@@ -1154,14 +1171,15 @@ class CreepyFigure {
                 console.log('⚠️ No animations found in runner.glb')
             }
             
-            // Start at random position
-            this.spawnAtRandomLocation()
-            this.scene.add(this.figure)
+            // Add to scene if not already added
+            if (!this.figure.parent) {
+                this.scene.add(this.figure)
+            }
             
-            console.log('🔥 Runner figure loaded and hunting begins!')
+            console.log('🔥 Runner figure loaded and ready!')
         }, 
         (progress) => {
-            console.log('Loading runner.glb:', Math.round(progress.loaded / progress.total * 100) + '%')
+            // console.log('Loading runner.glb:', Math.round(progress.loaded / progress.total * 100) + '%')
         },
         (error) => {
             console.error('❌ Failed to load runner.glb:', error)
@@ -1597,6 +1615,202 @@ class CreepyFigure {
 
 // Initialize the creepy figure
 const creepyFigure = new CreepyFigure(scene, camera)
+// Set initial spawn position
+creepyFigure.spawnAtRandomLocation()
+
+// ---------- Multiple Creepers System ----------
+const creepers = new Map()
+const creeperGrid = new Map()
+const CREEPER_DENSITY = 0.08 // Increased back to 8% for more spawns
+const CREEPER_GRID_SIZE = 20 // Keep larger grid for spacing
+const CREEPER_VIEW_DISTANCE = 120 // Slightly further view distance
+const MAX_ACTIVE_CREEPERS = 8 // Increased back to 8
+const MIN_SPAWN_DISTANCE = 40 // Reduced from 60 to 40 units
+
+// Global creeper ID counter
+let nextCreeperId = 1
+
+// Function to generate creepers in a grid cell
+function generateCreepersInCell(gridX, gridZ, playerX = 0, playerZ = 10) {
+    const key = `${gridX},${gridZ}`
+    if (creeperGrid.has(key)) return
+    
+    // Don't spawn creepers too close to starting position
+    const distanceFromStart = Math.sqrt(gridX * gridX + gridZ * gridZ) * CREEPER_GRID_SIZE
+    if (distanceFromStart < MIN_SPAWN_DISTANCE) return
+    
+    // Don't spawn creepers too close to current player position
+    const cellCenterX = gridX * CREEPER_GRID_SIZE
+    const cellCenterZ = gridZ * CREEPER_GRID_SIZE
+    const distanceFromPlayer = Math.sqrt(
+        Math.pow(cellCenterX - playerX, 2) + 
+        Math.pow(cellCenterZ - playerZ, 2)
+    )
+    if (distanceFromPlayer < MIN_SPAWN_DISTANCE) return
+    
+    // Use deterministic random based on grid position
+    const seed = gridX * 3000 + gridZ * 7000
+    const random = () => {
+        const x = Math.sin(seed) * 10000
+        return x - Math.floor(x)
+    }
+    
+    const randomValue = random()
+    
+    // Check if this cell should have a creeper
+    if (randomValue < CREEPER_DENSITY) {
+        // Check if we've reached the maximum number of creepers
+        if (creepers.size >= MAX_ACTIVE_CREEPERS) {
+            console.log(`⚠️ Max creepers reached: ${creepers.size}/${MAX_ACTIVE_CREEPERS}`)
+            return
+        }
+        
+        // Try multiple positions within the grid cell
+        for (let attempt = 0; attempt < 4; attempt++) {
+            const x = gridX * CREEPER_GRID_SIZE + (random() - 0.5) * CREEPER_GRID_SIZE * 0.9
+            const z = gridZ * CREEPER_GRID_SIZE + (random() - 0.5) * CREEPER_GRID_SIZE * 0.9
+            
+            // Check if too close to trees
+            let tooCloseToTree = false
+            for (let dx = -1; dx <= 1; dx++) {
+                for (let dz = -1; dz <= 1; dz++) {
+                    const treeKey = `${Math.floor(x / GRID_SIZE) + dx},${Math.floor(z / GRID_SIZE) + dz}`
+                    if (treeGrid.has(treeKey)) {
+                        const treeData = treeGrid.get(treeKey)
+                        const distance = Math.sqrt(
+                            Math.pow(x - treeData.x, 2) + 
+                            Math.pow(z - treeData.z, 2)
+                        )
+                        if (distance < 6) { // 6 unit buffer from trees
+                            tooCloseToTree = true
+                            break
+                        }
+                    }
+                }
+                if (tooCloseToTree) break
+            }
+            
+            if (!tooCloseToTree) {
+                // Found a good spot - create creeper
+                const creeper = new CreepyFigure(scene, camera)
+                
+                // Assign unique ID
+                creeper.id = nextCreeperId++
+                
+                // Set initial position (will be applied when model loads)
+                creeper.position.set(x, 0, z)
+                
+                // Set fade-in properties (will be applied when model loads)
+                creeper.opacity = 0
+                creeper.targetOpacity = 1
+                creeper.initiallyVisible = false // Start invisible
+                creeper.fadeInDelay = 1 + Math.random() * 2
+                creeper.fadeStartTime = performance.now() + creeper.fadeInDelay * 1000
+                creeper.spawnDelay = 5 + Math.random() * 8
+                creeper.gameStartTime = performance.now() + creeper.fadeInDelay * 1000
+                creeper.detectionRange = 15 + Math.random() * 10
+                
+                // Store creeper
+                creepers.set(key, creeper)
+                creeperGrid.set(key, { position: new THREE.Vector3(x, 0, z), creeper: creeper })
+                
+                const attemptText = attempt > 0 ? ` [attempt ${attempt + 1}]` : ''
+                console.log(`🔥 Spawned creeper #${creeper.id} at (${x.toFixed(1)}, ${z.toFixed(1)})${attemptText} - will fade in after ${creeper.fadeInDelay.toFixed(1)}s`)
+                return // Successfully spawned
+            }
+        }
+        
+        // All attempts failed - skip this cell silently
+    }
+}
+
+// Function to update visible creepers based on player position
+function updateCreepers(playerX, playerZ) {
+    const playerGridX = Math.floor(playerX / CREEPER_GRID_SIZE)
+    const playerGridZ = Math.floor(playerZ / CREEPER_GRID_SIZE)
+    const gridRange = Math.ceil(CREEPER_VIEW_DISTANCE / CREEPER_GRID_SIZE)
+    
+    let newCreepersSpawned = 0
+    
+    // Generate creepers in view range
+    for (let dx = -gridRange; dx <= gridRange; dx++) {
+        for (let dz = -gridRange; dz <= gridRange; dz++) {
+            const gridX = playerGridX + dx
+            const gridZ = playerGridZ + dz
+            const distance = Math.sqrt(dx * dx + dz * dz) * CREEPER_GRID_SIZE
+            
+            if (distance <= CREEPER_VIEW_DISTANCE) {
+                const beforeCount = creepers.size
+                generateCreepersInCell(gridX, gridZ, playerX, playerZ)
+                if (creepers.size > beforeCount) {
+                    newCreepersSpawned++
+                }
+            }
+        }
+    }
+    
+    if (newCreepersSpawned > 0) {
+        console.log(`🌟 Spawned ${newCreepersSpawned} new creepers as player moved to (${playerX.toFixed(1)}, ${playerZ.toFixed(1)})`)
+    }
+    
+    // Remove creepers that are too far away
+    let removedCount = 0
+    const removedIds = []
+    for (const [key, creeper] of creepers.entries()) {
+        const [gridX, gridZ] = key.split(',').map(Number)
+        const dx = gridX - playerGridX
+        const dz = gridZ - playerGridZ
+        const distance = Math.sqrt(dx * dx + dz * dz) * CREEPER_GRID_SIZE
+        
+        if (distance > CREEPER_VIEW_DISTANCE * 1.5) {
+            // Remove creeper from scene
+            if (creeper.figure) {
+                scene.remove(creeper.figure)
+            }
+            removedIds.push(creeper.id)
+            creepers.delete(key)
+            creeperGrid.delete(key)
+            removedCount++
+        }
+    }
+    
+    if (removedCount > 0) {
+        console.log(`🗑️ Removed ${removedCount} distant creepers (IDs: ${removedIds.join(', ')})`)
+    }
+}
+
+// Initialize creepers around starting position
+function initializeCreepers(playerX, playerZ) {
+    console.log(`🔍 Initializing creepers around player position (${playerX}, ${playerZ})`)
+    const playerGridX = Math.floor(playerX / CREEPER_GRID_SIZE)
+    const playerGridZ = Math.floor(playerZ / CREEPER_GRID_SIZE)
+    const gridRange = Math.ceil(CREEPER_VIEW_DISTANCE / CREEPER_GRID_SIZE)
+    
+    let cellsChecked = 0
+    let cellsEligible = 0
+    
+    for (let dx = -gridRange; dx <= gridRange; dx++) {
+        for (let dz = -gridRange; dz <= gridRange; dz++) {
+            const gridX = playerGridX + dx
+            const gridZ = playerGridZ + dz
+            const distance = Math.sqrt(dx * dx + dz * dz) * CREEPER_GRID_SIZE
+            
+            cellsChecked++
+            
+            if (distance <= CREEPER_VIEW_DISTANCE && distance > MIN_SPAWN_DISTANCE) { // Don't spawn too close to start
+                cellsEligible++
+                generateCreepersInCell(gridX, gridZ, playerX, playerZ)
+            }
+        }
+    }
+    
+    console.log(`📊 Checked ${cellsChecked} cells, ${cellsEligible} were eligible for creeper spawning`)
+    console.log(`🎯 Grid range: ${gridRange}, View distance: ${CREEPER_VIEW_DISTANCE}, Min spawn: ${MIN_SPAWN_DISTANCE}`)
+    console.log(`👹 Total creepers spawned: ${creepers.size}`)
+}
+
+// Initialize creepers around starting position
+initializeCreepers(0, 10)
 
 // ---------- Lightning Manager ----------
 class LightingManager {
@@ -1673,6 +1887,38 @@ document.addEventListener('keydown', (e) => {
             creepyFigure.forceAppear()
             console.log('Forced creepy figure to appear')
             break
+        case 'g': // Debug: force ALL creepers to appear
+            console.log(`🔧 Forcing ${creepers.size} creepers to appear and chase`)
+            for (const [key, creeper] of creepers.entries()) {
+                creeper.forceAppear()
+            }
+            break
+        case 'h': // Debug: list all active creepers
+            console.log(`👹 Active creepers: ${creepers.size}/${MAX_ACTIVE_CREEPERS}`)
+            if (creepers.size === 0) {
+                console.log('  No active creepers')
+            } else {
+                let index = 1
+                // Sort creepers by distance for better readability
+                const creeperArray = Array.from(creepers.entries()).map(([key, creeper]) => {
+                    const distance = Math.sqrt(
+                        Math.pow(creeper.position.x - cameraGroup.position.x, 2) + 
+                        Math.pow(creeper.position.z - cameraGroup.position.z, 2)
+                    )
+                    return { key, creeper, distance }
+                }).sort((a, b) => a.distance - b.distance)
+                
+                for (const { key, creeper, distance } of creeperArray) {
+                    const [gridX, gridZ] = key.split(',').map(Number)
+                    const modelStatus = creeper.figure ? 'loaded' : 'loading'
+                    const visibility = creeper.figure ? (creeper.figure.visible ? 'visible' : 'hidden') : 'n/a'
+                    const opacity = creeper.opacity !== undefined ? creeper.opacity.toFixed(2) : 'n/a'
+                    const canSee = creeper.canSeePlayer ? '👁️' : '❌'
+                    console.log(`  ${index}. ID:${creeper.id} Grid(${gridX},${gridZ}) Pos(${creeper.position.x.toFixed(1)},${creeper.position.z.toFixed(1)}) Distance:${distance.toFixed(1)}m State:${creeper.state} Model:${modelStatus} Visible:${visibility} Opacity:${opacity} CanSee:${canSee}`)
+                    index++
+                }
+            }
+            break
         case 'l': // Debug: list animations
             creepyFigure.listAnimations()
             break
@@ -1730,6 +1976,27 @@ function animate() {
     // Update creepy figure
     creepyFigure.update(delta, cameraGroup.position)
     
+    // Update all creepers
+    for (const [key, creeper] of creepers.entries()) {
+        // Handle fade-in effect
+        if (creeper.opacity < creeper.targetOpacity) {
+            const currentTime = performance.now()
+            if (currentTime >= creeper.fadeStartTime) {
+                creeper.opacity += 0.02 // Fade in speed
+                if (creeper.figure) {
+                    creeper.figure.visible = true
+                    creeper.figure.traverse((child) => {
+                        if (child.material) {
+                            child.material.opacity = creeper.opacity
+                        }
+                    })
+                }
+            }
+        }
+        
+        creeper.update(delta, cameraGroup.position)
+    }
+    
     // Update camera rotation from mouse
     camera.rotation.order = 'YXZ'
     camera.rotation.y = THREE.MathUtils.degToRad(-lon)
@@ -1771,6 +2038,7 @@ function animate() {
             updateTrees(newPosition.x, newPosition.z)
             updateRocks(newPosition.x, newPosition.z)
             updateLogs(newPosition.x, newPosition.z)
+            updateCreepers(newPosition.x, newPosition.z)
             
             // Head bobbing
             bobAmount += delta * 5

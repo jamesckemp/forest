@@ -1092,7 +1092,229 @@ class CreepyFigure {
         this.gameStartTime = performance.now()
         this.detectionActive = false // Track if detection has been activated
         
+        // Enhanced scream audio system with Web Audio API
+        this.audioContext = null
+        this.screamBuffer = null
+        this.screamSource = null
+        this.gainNode = null
+        this.pitchShiftNode = null
+        this.isScreaming = false
+        this.screamCooldown = 0
+        this.minScreamInterval = 2 // Minimum seconds between screams
+        this.maxScreamInterval = 5 // Maximum seconds between screams
+        this.nextScreamTime = 0
+        this.baseScreamVolume = 0.6
+        this.maxScreamDistance = 30 // Distance at which scream is barely audible
+        this.minScreamDistance = 5 // Distance at which scream is at full volume
+        
+        this.initScreamAudio()
         this.loadModel()
+    }
+    
+    initScreamAudio() {
+        try {
+            // Initialize Web Audio API context
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)()
+            
+            // Create gain node for volume control
+            this.gainNode = this.audioContext.createGain()
+            this.gainNode.connect(this.audioContext.destination)
+            this.gainNode.gain.value = 0
+            
+            // Load the scream audio file
+            fetch('759456__akridiy__a-single-scream-of-a-young-male.wav')
+                .then(response => response.arrayBuffer())
+                .then(data => this.audioContext.decodeAudioData(data))
+                .then(buffer => {
+                    this.screamBuffer = buffer
+                    console.log(`✅ Scream audio loaded for creeper #${this.id || 'main'}`)
+                })
+                .catch(error => {
+                    console.log(`❌ Failed to load scream audio for creeper: ${error.message}`)
+                })
+            
+        } catch (error) {
+            console.log('❌ Could not initialize Web Audio API:', error)
+            // Fallback to simple audio if Web Audio API fails
+            this.initFallbackAudio()
+        }
+    }
+    
+    initFallbackAudio() {
+        try {
+            this.screamAudio = new Audio('759456__akridiy__a-single-scream-of-a-young-male.wav')
+            this.screamAudio.preload = 'auto'
+            this.screamAudio.volume = 0
+            
+            this.screamAudio.addEventListener('ended', () => {
+                this.isScreaming = false
+                this.nextScreamTime = performance.now() + 
+                    (this.minScreamInterval + Math.random() * (this.maxScreamInterval - this.minScreamInterval)) * 1000
+            })
+            
+            this.screamAudio.addEventListener('error', (e) => {
+                console.log(`❌ Failed to load fallback scream audio: ${e.message}`)
+            })
+            
+        } catch (error) {
+            console.log('❌ Could not initialize fallback audio:', error)
+        }
+    }
+    
+    playScream() {
+        if (this.isScreaming || performance.now() < this.nextScreamTime) {
+            return
+        }
+        
+        // Calculate volume based on distance to player
+        const distanceToPlayer = this.position.distanceTo(this.playerPosition)
+        let volume = 0
+        
+        if (distanceToPlayer <= this.minScreamDistance) {
+            volume = this.baseScreamVolume
+        } else if (distanceToPlayer <= this.maxScreamDistance) {
+            const falloff = 1 - (distanceToPlayer - this.minScreamDistance) / 
+                (this.maxScreamDistance - this.minScreamDistance)
+            volume = this.baseScreamVolume * falloff
+        }
+        
+        // Add slight volume variation
+        const volumeVariation = 0.8 + Math.random() * 0.4
+        volume *= volumeVariation
+        
+        // Only play if volume is audible
+        if (volume < 0.05) return
+        
+        if (this.audioContext && this.screamBuffer) {
+            this.playWebAudioScream(volume)
+        } else if (this.screamAudio) {
+            this.playFallbackScream(volume)
+        }
+    }
+    
+    playWebAudioScream(volume) {
+        try {
+            // Stop any existing scream
+            if (this.screamSource) {
+                this.screamSource.stop()
+                this.screamSource.disconnect()
+            }
+            
+            // Create new source
+            this.screamSource = this.audioContext.createBufferSource()
+            this.screamSource.buffer = this.screamBuffer
+            
+            // Independent speed and pitch control
+            const speedVariation = 0.6 + Math.random() * 1.0 // 0.6x to 1.6x speed
+            const pitchVariation = 0.5 + Math.random() * 1.5 // 0.5x to 2.0x pitch
+            
+            this.screamSource.playbackRate.value = speedVariation
+            
+            // Create pitch shift effect using detune (in cents, 100 cents = 1 semitone)
+            const pitchCents = Math.log2(pitchVariation) * 1200
+            this.screamSource.detune.value = pitchCents
+            
+            // Set volume
+            this.gainNode.gain.value = Math.max(0, Math.min(1, volume))
+            
+            // Connect audio graph
+            this.screamSource.connect(this.gainNode)
+            
+            // Handle scream end
+            this.screamSource.onended = () => {
+                this.isScreaming = false
+                this.nextScreamTime = performance.now() + 
+                    (this.minScreamInterval + Math.random() * (this.maxScreamInterval - this.minScreamInterval)) * 1000
+                if (this.screamSource) {
+                    this.screamSource.disconnect()
+                    this.screamSource = null
+                }
+            }
+            
+            // Start playing
+            this.screamSource.start()
+            this.isScreaming = true
+            
+            const speedDesc = speedVariation < 0.8 ? 'SLOW' : speedVariation > 1.3 ? 'FAST' : 'normal'
+            const pitchDesc = pitchVariation < 0.7 ? 'DEMONIC' : 
+                            pitchVariation > 1.4 ? 'SHRILL' : 
+                            pitchVariation < 1.0 ? 'low' : 'high'
+            
+            console.log(`👹 Creeper #${this.id || 'main'} screaming: Speed ${speedVariation.toFixed(2)}x (${speedDesc}), Pitch ${pitchVariation.toFixed(2)}x (${pitchDesc}), Volume ${volume.toFixed(2)}`)
+            
+        } catch (error) {
+            console.log('❌ Error playing Web Audio scream:', error)
+            // Fallback to simple audio
+            this.playFallbackScream(volume)
+        }
+    }
+    
+    playFallbackScream(volume) {
+        try {
+            this.screamAudio.currentTime = 0
+            
+            // Simple playback rate variation (affects both speed and pitch together)
+            const playbackVariation = 0.5 + Math.random() * 1.5
+            this.screamAudio.playbackRate = playbackVariation
+            this.screamAudio.volume = Math.max(0, Math.min(1, volume))
+            
+            this.screamAudio.play().then(() => {
+                this.isScreaming = true
+                console.log(`👹 Creeper #${this.id || 'main'} screaming (fallback): Rate ${playbackVariation.toFixed(2)}x, Volume ${volume.toFixed(2)}`)
+            }).catch(e => {
+                console.log(`❌ Failed to play fallback scream: ${e.message}`)
+            })
+            
+        } catch (error) {
+            console.log('❌ Error playing fallback scream:', error)
+        }
+    }
+    
+    stopScream() {
+        if (this.screamSource && this.isScreaming) {
+            try {
+                this.screamSource.stop()
+                this.screamSource.disconnect()
+                this.screamSource = null
+            } catch (e) {
+                // Source might already be stopped
+            }
+            this.isScreaming = false
+            console.log(`🔇 Creeper #${this.id || 'main'} stopped screaming`)
+        } else if (this.screamAudio && this.isScreaming) {
+            this.screamAudio.pause()
+            this.screamAudio.currentTime = 0
+            this.isScreaming = false
+            console.log(`🔇 Creeper #${this.id || 'main'} stopped screaming (fallback)`)
+        }
+    }
+    
+    updateScreamAudio() {
+        if (!this.isScreaming) return
+        
+        // Update volume based on current distance
+        const distanceToPlayer = this.position.distanceTo(this.playerPosition)
+        let volume = 0
+        
+        if (distanceToPlayer <= this.minScreamDistance) {
+            volume = this.baseScreamVolume
+        } else if (distanceToPlayer <= this.maxScreamDistance) {
+            const falloff = 1 - (distanceToPlayer - this.minScreamDistance) / 
+                (this.maxScreamDistance - this.minScreamDistance)
+            volume = this.baseScreamVolume * falloff
+        }
+        
+        // Apply volume
+        if (this.gainNode) {
+            this.gainNode.gain.value = Math.max(0, Math.min(1, volume))
+        } else if (this.screamAudio) {
+            this.screamAudio.volume = Math.max(0, Math.min(1, volume))
+        }
+        
+        // Stop scream if player gets too close (creeper caught them)
+        if (distanceToPlayer < 2) {
+            this.stopScream()
+        }
     }
     
     loadModel() {
@@ -1406,25 +1628,25 @@ class CreepyFigure {
     
     update(deltaTime, playerPosition) {
         if (!this.figure) return
-        
+
         this.playerPosition.copy(playerPosition)
         this.stateTimer += deltaTime
-        
+
         const distanceToPlayer = this.position.distanceTo(this.playerPosition)
-        
+
         // Check if spawn delay has passed
         const timeSinceStart = (performance.now() - this.gameStartTime) / 1000
         const canDetect = timeSinceStart > this.spawnDelay
-        
+
         // Show message when detection becomes active
         if (canDetect && !this.detectionActive) {
             this.detectionActive = true
             console.log('👁️ Creep can now detect you! Stay hidden behind trees and rocks.')
         }
-        
+
         // Check line of sight only if spawn delay has passed
         this.canSeePlayer = canDetect && this.checkLineOfSight(this.position, this.playerPosition)
-        
+
         // Simple 3-mode behavior system
         if (this.canSeePlayer && distanceToPlayer < this.detectionRange) {
             // Mode 3: Player spotted - chase!
@@ -1432,14 +1654,22 @@ class CreepyFigure {
                 this.state = 'chasing'
                 this.stateTimer = 0
                 console.log('🏃 Creep spotted you! Running towards you!')
+                
+                // Start screaming when chase begins
+                this.playScream()
             }
-            
+
             // Target player's ground position, not camera position
             this.targetPosition.copy(this.playerPosition)
             this.targetPosition.y = 0 // Force target to ground level
             this.moveTowards(this.targetPosition, this.chaseSpeed, deltaTime)
             this.isMoving = true
             
+            // Continue screaming while chasing (respecting cooldowns)
+            if (!this.isScreaming && performance.now() >= this.nextScreamTime) {
+                this.playScream()
+            }
+
             // Face the player (only rotate around Y-axis to stay upright)
             const direction = this.playerPosition.clone().sub(this.position)
             direction.y = 0 // Ignore vertical difference
@@ -1448,21 +1678,22 @@ class CreepyFigure {
                 const angle = Math.atan2(direction.x, direction.z)
                 this.figure.rotation.y = angle
             }
-            
+
         } else {
             // Player not visible - switch between idle and wandering
             if (this.state === 'chasing') {
-                // Lost sight of player, go back to idle
+                // Lost sight of player, go back to idle and stop screaming
                 this.state = 'idle'
                 this.stateTimer = 0
                 this.idleTime = 2 + Math.random() * 3
+                this.stopScream()
                 console.log('❓ Lost sight of player, going idle...')
             }
-            
+
             if (this.state === 'idle') {
                 // Mode 1: Standing still
                 this.isMoving = false
-                
+
                 if (this.stateTimer > this.idleTime) {
                     // Switch to wandering
                     this.state = 'wandering'
@@ -1470,11 +1701,11 @@ class CreepyFigure {
                     this.targetPosition = this.getRandomWanderPoint()
                     console.log('🚶 Starting to wander around...')
                 }
-                
+
             } else if (this.state === 'wandering') {
                 // Mode 2: Walking around
                 const distanceToTarget = this.position.distanceTo(this.targetPosition)
-                
+
                 if (distanceToTarget < 2 || this.stateTimer > 8) {
                     // Reached target or wandered long enough, go idle
                     this.state = 'idle'
@@ -1486,7 +1717,7 @@ class CreepyFigure {
                     // Keep wandering
                     this.moveTowards(this.targetPosition, this.wanderSpeed, deltaTime)
                     this.isMoving = true
-                    
+
                     // Face movement direction (only rotate around Y-axis to stay upright)
                     const direction = this.targetPosition.clone().sub(this.position)
                     direction.y = 0 // Ignore vertical difference
@@ -1499,13 +1730,16 @@ class CreepyFigure {
             }
         }
         
+        // Update scream audio (volume based on distance, stop if too close)
+        this.updateScreamAudio()
+
         // Update animations based on movement
         if (this.mixer) {
             this.mixer.update(deltaTime)
-            
+
             if (this.animations && Object.keys(this.animations).length > 0) {
                 let targetAnimation = null
-                
+
                 if (this.state === 'idle') {
                     // Force idle animation when standing still
                     targetAnimation = this.findAnimation(['idle', 'standing', 'rest', 'default'])
@@ -1516,18 +1750,18 @@ class CreepyFigure {
                     // Force run animation when chasing
                     targetAnimation = this.findAnimation(['run', 'running', 'sprint', 'fast'])
                 }
-                
+
                 // Fallback to first available if nothing found
                 if (!targetAnimation) {
                     targetAnimation = Object.keys(this.animations)[0]
                 }
-                
+
                 // Only change animation if it's different
                 if (targetAnimation && this.currentAction?.getClip().name.toLowerCase() !== targetAnimation) {
                     console.log(`🎬 Switching to animation: ${targetAnimation} (state: ${this.state})`)
                     this.playAnimation(targetAnimation, true)
                 }
-                
+
                 // Adjust animation speed
                 if (this.currentAction) {
                     let speedMultiplier = 1.0
@@ -1542,7 +1776,7 @@ class CreepyFigure {
                 }
             }
         }
-        
+
         // Apply ground offset to keep model on ground
         if (this.figure) {
             this.figure.position.copy(this.position)
@@ -1914,8 +2148,21 @@ document.addEventListener('keydown', (e) => {
                     const visibility = creeper.figure ? (creeper.figure.visible ? 'visible' : 'hidden') : 'n/a'
                     const opacity = creeper.opacity !== undefined ? creeper.opacity.toFixed(2) : 'n/a'
                     const canSee = creeper.canSeePlayer ? '👁️' : '❌'
-                    console.log(`  ${index}. ID:${creeper.id} Grid(${gridX},${gridZ}) Pos(${creeper.position.x.toFixed(1)},${creeper.position.z.toFixed(1)}) Distance:${distance.toFixed(1)}m State:${creeper.state} Model:${modelStatus} Visible:${visibility} Opacity:${opacity} CanSee:${canSee}`)
+                    const screamStatus = creeper.isScreaming ? '🔊' : '🔇'
+                    console.log(`  ${index}. ID:${creeper.id} Grid(${gridX},${gridZ}) Pos(${creeper.position.x.toFixed(1)},${creeper.position.z.toFixed(1)}) Distance:${distance.toFixed(1)}m State:${creeper.state} Model:${modelStatus} Visible:${visibility} Opacity:${opacity} CanSee:${canSee} Scream:${screamStatus}`)
                     index++
+                }
+            }
+            break
+        case 'x': // Debug: test scream sound
+            console.log('🔊 Testing scream sounds...')
+            creepyFigure.playScream()
+            // Test a few random creepers too
+            let testedCount = 0
+            for (const [key, creeper] of creepers.entries()) {
+                if (testedCount < 3) {
+                    creeper.playScream()
+                    testedCount++
                 }
             }
             break

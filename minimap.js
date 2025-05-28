@@ -410,42 +410,98 @@ class Minimap {
             if (obj.completed) return
             
             const screenPos = this.worldToScreen(obj.position.x, obj.position.z)
+            const center = this.size / 2
             
-            // Only draw if within screen bounds
-            if (screenPos.x >= 0 && screenPos.x <= this.size && 
-                screenPos.y >= 0 && screenPos.y <= this.size) {
+            // Calculate distance from center of radar to objective point
+            const dx = screenPos.x - center
+            const dy = screenPos.y - center
+            const distance = Math.sqrt(dx * dx + dy * dy)
+            const maxRadius = (this.size / 2) - 10 // Leave 10px margin from edge
+            
+            let finalX = screenPos.x
+            let finalY = screenPos.y
+            
+            // If objective is outside radar range, place it on the edge
+            if (distance > maxRadius) {
+                const angle = Math.atan2(dy, dx)
+                finalX = center + Math.cos(angle) * maxRadius
+                finalY = center + Math.sin(angle) * maxRadius
+            }
+            
+            // Pulsing yellow objective dot
+            const pulseScale = 1 + Math.sin(performance.now() * 0.005) * 0.3
+            const radius = 5 * pulseScale
+            
+            // Draw direction arrow when objective is out of range
+            if (distance > maxRadius) {
+                const arrowSize = 8
+                const angle = Math.atan2(dy, dx)
                 
-                // Pulsing yellow objective dot
-                const pulseScale = 1 + Math.sin(performance.now() * 0.005) * 0.3
-                const radius = 5 * pulseScale
-                
-                // Outer glow
-                this.ctx.fillStyle = 'rgba(255, 255, 0, 0.4)'
+                // Arrow body
+                this.ctx.strokeStyle = 'rgba(255, 255, 0, 0.9)'
+                this.ctx.lineWidth = 3
                 this.ctx.beginPath()
-                this.ctx.arc(screenPos.x, screenPos.y, radius * 2, 0, Math.PI * 2)
-                this.ctx.fill()
-                
-                // Main dot
-                this.ctx.fillStyle = 'rgba(255, 255, 0, 0.9)'
-                this.ctx.beginPath()
-                this.ctx.arc(screenPos.x, screenPos.y, radius, 0, Math.PI * 2)
-                this.ctx.fill()
-                
-                // Bright center
-                this.ctx.fillStyle = 'rgba(255, 255, 150, 1.0)'
-                this.ctx.beginPath()
-                this.ctx.arc(screenPos.x, screenPos.y, radius * 0.4, 0, Math.PI * 2)
-                this.ctx.fill()
-                
-                // Add objective marker symbol (small cross)
-                this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)'
-                this.ctx.lineWidth = 2
-                this.ctx.beginPath()
-                this.ctx.moveTo(screenPos.x - 3, screenPos.y)
-                this.ctx.lineTo(screenPos.x + 3, screenPos.y)
-                this.ctx.moveTo(screenPos.x, screenPos.y - 3)
-                this.ctx.lineTo(screenPos.x, screenPos.y + 3)
+                this.ctx.moveTo(
+                    finalX - Math.cos(angle) * arrowSize,
+                    finalY - Math.sin(angle) * arrowSize
+                )
+                this.ctx.lineTo(finalX, finalY)
                 this.ctx.stroke()
+                
+                // Arrow head
+                this.ctx.beginPath()
+                this.ctx.moveTo(finalX, finalY)
+                this.ctx.lineTo(
+                    finalX - Math.cos(angle + Math.PI/6) * arrowSize,
+                    finalY - Math.sin(angle + Math.PI/6) * arrowSize
+                )
+                this.ctx.moveTo(finalX, finalY)
+                this.ctx.lineTo(
+                    finalX - Math.cos(angle - Math.PI/6) * arrowSize,
+                    finalY - Math.sin(angle - Math.PI/6) * arrowSize
+                )
+                this.ctx.stroke()
+            }
+            
+            // Outer glow
+            this.ctx.fillStyle = 'rgba(255, 255, 0, 0.4)'
+            this.ctx.beginPath()
+            this.ctx.arc(finalX, finalY, radius * 2, 0, Math.PI * 2)
+            this.ctx.fill()
+            
+            // Main dot
+            this.ctx.fillStyle = 'rgba(255, 255, 0, 0.9)'
+            this.ctx.beginPath()
+            this.ctx.arc(finalX, finalY, radius, 0, Math.PI * 2)
+            this.ctx.fill()
+            
+            // Bright center
+            this.ctx.fillStyle = 'rgba(255, 255, 150, 1.0)'
+            this.ctx.beginPath()
+            this.ctx.arc(finalX, finalY, radius * 0.4, 0, Math.PI * 2)
+            this.ctx.fill()
+            
+            // Add objective marker symbol (small cross)
+            this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)'
+            this.ctx.lineWidth = 2
+            this.ctx.beginPath()
+            this.ctx.moveTo(finalX - 3, finalY)
+            this.ctx.lineTo(finalX + 3, finalY)
+            this.ctx.moveTo(finalX, finalY - 3)
+            this.ctx.lineTo(finalX, finalY + 3)
+            this.ctx.stroke()
+            
+            // Show distance when objective is out of range
+            if (distance > maxRadius) {
+                const actualDistance = Math.sqrt(
+                    Math.pow(obj.position.x - this.playerPosition.x, 2) +
+                    Math.pow(obj.position.z - this.playerPosition.z, 2)
+                ).toFixed(0)
+                
+                this.ctx.fillStyle = 'rgba(255, 255, 0, 0.9)'
+                this.ctx.font = '10px monospace'
+                this.ctx.textAlign = 'center'
+                this.ctx.fillText(`${actualDistance}m`, finalX, finalY + 15)
             }
         }
     }

@@ -919,7 +919,7 @@ generateGrass(0, 10)
 // Tall grass patches for hiding
 const tallGrassPatches = []
 const tallGrassPatchGrid = new Map()
-const TALL_GRASS_DENSITY = 0.15 // 15% chance per grid cell
+const TALL_GRASS_DENSITY = 0.5 // 50% chance per grid cell - much denser
 
 function createTallGrassPatch(x, z) {
     const patch = new THREE.Group()
@@ -943,6 +943,16 @@ function createTallGrassPatch(x, z) {
         
         // Make it darker green
         blade.material.color.setHSL(0.27, 0.7, 0.15)
+        
+        // Add animation properties like regular grass
+        blade.userData.swayOffset = Math.random() * Math.PI * 2
+        blade.userData.swayAmount = 0.08 + Math.random() * 0.04 // Slightly more sway for tall grass
+        blade.userData.originalRotation = {
+            x: blade.rotation.x,
+            y: blade.rotation.y,
+            z: blade.rotation.z
+        }
+        blade.userData.originalPosition = blade.position.clone()
         
         patch.add(blade)
         patch.userData.blades.push(blade)
@@ -3313,6 +3323,20 @@ function animate() {
             grass.position.z = playerZ + Math.sin(angle) * distance
             grass.userData.originalPosition.copy(grass.position)
         }
+    })
+    
+    // Animate tall grass patches
+    tallGrassPatches.forEach((patch) => {
+        patch.userData.blades.forEach((blade) => {
+            const swayTime = time * 0.8 + blade.userData.swayOffset
+            
+            // Apply swaying motion similar to regular grass
+            blade.rotation.z = blade.userData.originalRotation.z + 
+                Math.sin(swayTime) * blade.userData.swayAmount
+            
+            blade.rotation.x = blade.userData.originalRotation.x + 
+                Math.sin(swayTime * 0.7) * blade.userData.swayAmount * 0.5
+        })
     })
     
     // Selective bloom rendering

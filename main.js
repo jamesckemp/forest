@@ -2437,7 +2437,7 @@ const creepers = new Map()
 const creeperGrid = new Map()
 const CREEPER_DENSITY = 0.18 // Increased from 0.08 to 0.18 (18% spawn chance)
 const CREEPER_GRID_SIZE = 20 // Keep larger grid for spacing
-const CREEPER_VIEW_DISTANCE = 150 // Increased from 120 to 150
+const CREEPER_VIEW_DISTANCE = 100 // Reduced from 150 to 100
 const MAX_ACTIVE_CREEPERS = 20 // Increased from 8 to 20
 const MIN_SPAWN_DISTANCE = 30 // Reduced from 40 to 30 units
 
@@ -2449,13 +2449,36 @@ function generateCreepersInCell(gridX, gridZ, playerX = 0, playerZ = 10) {
     const key = `${gridX},${gridZ}`
     if (creeperGrid.has(key)) return
     
+    // Calculate if this cell is in front of the player based on movement direction
+    const movementDirection = new THREE.Vector2(movement.forward ? 0 : (movement.backward ? Math.PI : null))
+    if (movement.left) movementDirection.y = movementDirection.y ? movementDirection.y - Math.PI/4 : -Math.PI/2
+    if (movement.right) movementDirection.y = movementDirection.y ? movementDirection.y + Math.PI/4 : Math.PI/2
+    
+    const cellCenterX = gridX * CREEPER_GRID_SIZE
+    const cellCenterZ = gridZ * CREEPER_GRID_SIZE
+    const toCell = new THREE.Vector2(cellCenterX - playerX, cellCenterZ - playerZ).normalize()
+    
+    // Calculate angle between movement direction and cell direction
+    let angleToCell = 0
+    if (movementDirection.y !== null) {
+        angleToCell = Math.abs(movementDirection.angle() - toCell.angle())
+        // Normalize angle to [0, π]
+        angleToCell = Math.min(angleToCell, Math.PI * 2 - angleToCell)
+    }
+    
+    // Higher spawn chance if cell is in front of player
+    let spawnChanceMult = 1.0
+    if (angleToCell < Math.PI/2) { // Cell is in front 90° arc
+        spawnChanceMult = 2.0 // Double spawn chance in front
+    } else if (angleToCell > Math.PI * 3/4) { // Cell is behind 90° arc
+        spawnChanceMult = 0.3 // Reduce spawn chance behind
+    }
+    
     // Don't spawn creepers too close to starting position
     const distanceFromStart = Math.sqrt(gridX * gridX + gridZ * gridZ) * CREEPER_GRID_SIZE
     if (distanceFromStart < MIN_SPAWN_DISTANCE) return
     
     // Don't spawn creepers too close to current player position
-    const cellCenterX = gridX * CREEPER_GRID_SIZE
-    const cellCenterZ = gridZ * CREEPER_GRID_SIZE
     const distanceFromPlayer = Math.sqrt(
         Math.pow(cellCenterX - playerX, 2) + 
         Math.pow(cellCenterZ - playerZ, 2)
@@ -2471,8 +2494,8 @@ function generateCreepersInCell(gridX, gridZ, playerX = 0, playerZ = 10) {
     
     const randomValue = random()
     
-    // Check if this cell should have a creeper
-    if (randomValue < CREEPER_DENSITY) {
+    // Check if this cell should have a creeper (using modified spawn chance)
+    if (randomValue < CREEPER_DENSITY * spawnChanceMult) {
         // Check if we've reached the maximum number of creepers
         if (creepers.size >= MAX_ACTIVE_CREEPERS) {
             console.log(`⚠️ Max creepers reached: ${creepers.size}/${MAX_ACTIVE_CREEPERS}`)
@@ -2576,7 +2599,7 @@ function updateCreepers(playerX, playerZ) {
         const dz = gridZ - playerGridZ
         const distance = Math.sqrt(dx * dx + dz * dz) * CREEPER_GRID_SIZE
         
-        if (distance > CREEPER_VIEW_DISTANCE * 1.5) {
+        if (distance > CREEPER_VIEW_DISTANCE * 1.2) { // Reduced from 1.5 to 1.2
             // Remove creeper from scene
             if (creeper.figure) {
                 scene.remove(creeper.figure)

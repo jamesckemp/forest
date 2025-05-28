@@ -2746,9 +2746,17 @@ document.addEventListener('keydown', (e) => {
         case 'd': movement.right = true; break
         case 'shift': 
             movement.shift = true
-            // Can only sprint if standing and have enough stamina
-            if (playerState.stance === 'standing' && staminaSystem.current >= staminaSystem.minSprintStamina) {
+            if (movement.crouch) {
+                // If crouching, transition to sprint
+                movement.crouch = false
                 movement.sprint = true
+                playerState.stance = 'standing'
+                console.log('🏃 Transitioning from crouch to sprint')
+            } else {
+                // Normal sprint behavior
+                if (staminaSystem.current >= staminaSystem.minSprintStamina) {
+                    movement.sprint = true
+                }
             }
             break
         case 'c': 
@@ -2930,6 +2938,12 @@ document.addEventListener('keyup', (e) => {
         case 'shift': 
             movement.shift = false
             movement.sprint = false
+            // Return to crouch if we were crouching before sprinting
+            if (!movement.crouch) {
+                movement.crouch = true
+                playerState.stance = 'crouching'
+                console.log('🦆 Returning to crouch after sprint')
+            }
             break
     }
 })

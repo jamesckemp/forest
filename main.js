@@ -14,6 +14,88 @@ document.head.appendChild(minimapScript)
 // Test creeper for minimap debugging
 let testCreeper = null
 
+// Objective system
+const objective = {
+    position: { x: 350, z: 350 }, // Far from spawn point (0, 10) - increased from 150 to 350
+    radius: 5, // How close you need to get to complete
+    completed: false,
+    marker: null
+}
+
+// Create objective marker in the world
+function createObjectiveMarker() {
+    const markerGeometry = new THREE.CylinderGeometry(2, 2, 8, 8)
+    const markerMaterial = new THREE.MeshBasicMaterial({ 
+        color: 0xffff00,
+        emissive: 0xffff00,
+        emissiveIntensity: 0.5
+    })
+    const marker = new THREE.Mesh(markerGeometry, markerMaterial)
+    marker.position.set(objective.position.x, 4, objective.position.z)
+    marker.castShadow = true
+    
+    // Add pulsing glow effect
+    marker.userData = {
+        originalEmissiveIntensity: 0.5,
+        pulseSpeed: 0.003
+    }
+    
+    objective.marker = marker
+    scene.add(marker)
+    
+    console.log(`🎯 Objective marker placed at (${objective.position.x}, ${objective.position.z})`)
+    console.log(`📏 Distance from spawn: ${Math.sqrt(Math.pow(objective.position.x, 2) + Math.pow(objective.position.z - 10, 2)).toFixed(1)} units`)
+}
+
+// Check if player has reached the objective
+function checkObjectiveCompletion() {
+    if (objective.completed) return
+    
+    const distance = Math.sqrt(
+        Math.pow(cameraGroup.position.x - objective.position.x, 2) + 
+        Math.pow(cameraGroup.position.z - objective.position.z, 2)
+    )
+    
+    if (distance <= objective.radius) {
+        objective.completed = true
+        console.log('🎉 OBJECTIVE COMPLETED! You survived the forest!')
+        
+        // Show completion message
+        const completionDiv = document.createElement('div')
+        completionDiv.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 255, 0, 0.9);
+            color: black;
+            padding: 20px;
+            border-radius: 10px;
+            font-size: 24px;
+            font-weight: bold;
+            z-index: 2000;
+            text-align: center;
+        `
+        completionDiv.innerHTML = `
+            🎉 MISSION COMPLETE! 🎉<br>
+            You survived the forest!<br>
+            <small>Press R to restart</small>
+        `
+        document.body.appendChild(completionDiv)
+        
+        // Add restart functionality
+        const restartHandler = (e) => {
+            if (e.key.toLowerCase() === 'r') {
+                location.reload()
+            }
+        }
+        document.addEventListener('keydown', restartHandler)
+    }
+}
+
+// Make objective available globally for minimap
+window.objective = objective
+
 // Scene setup
 const scene = new THREE.Scene()
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000)
@@ -25,10 +107,75 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping
 renderer.toneMappingExposure = 1.2
 document.body.appendChild(renderer.domElement)
 
+// Create danger indicator overlay
+const dangerOverlay = document.createElement('div')
+dangerOverlay.id = 'danger-overlay'
+dangerOverlay.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 100;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    background: radial-gradient(ellipse at center, transparent 0%, transparent 40%, rgba(255, 0, 0, 0.3) 100%);
+    mix-blend-mode: multiply;
+`
+document.body.appendChild(dangerOverlay)
+
+// Stamina bar UI
+const staminaBar = document.createElement('div')
+staminaBar.style.cssText = `
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 200px;
+    height: 8px;
+    background: rgba(0, 0, 0, 0.5);
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 4px;
+    z-index: 101;
+`
+const staminaFill = document.createElement('div')
+staminaFill.style.cssText = `
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(to right, #00ff00, #ffff00);
+    border-radius: 2px;
+    transition: width 0.1s ease;
+`
+staminaBar.appendChild(staminaFill)
+document.body.appendChild(staminaBar)
+
+// Initialize objective marker
+createObjectiveMarker()
+
 // Hide loader and show info when ready
 setTimeout(() => {
     document.getElementById('loader').style.display = 'none'
     document.getElementById('info').style.display = 'block'
+    
+    // Show control hints initially
+    const infoElement = document.getElementById('info')
+    if (infoElement) {
+        infoElement.innerHTML = `
+            SURVIVE THE FOREST<br>Reach the yellow marker<br><br>
+            <span style="font-size: 14px; opacity: 0.8;">
+            WASD - Move | SHIFT - Sprint | C - Crouch<br>
+            Hide in tall grass while crouching to avoid detection
+            </span>
+        `
+        
+        // Remove hints after 10 seconds
+        setTimeout(() => {
+            if (!objective.completed) {
+                infoElement.innerHTML = 'SURVIVE THE FOREST<br>Reach the yellow marker'
+            }
+        }, 10000)
+    }
 }, 1000)
 
 // Fog for night-time thunderstorm atmosphere
@@ -769,6 +916,102 @@ function generateGrass(centerX, centerZ, radius = 50) {
 
 generateGrass(0, 10)
 
+// Tall grass patches for hiding
+const tallGrassPatches = []
+const tallGrassPatchGrid = new Map()
+const TALL_GRASS_DENSITY = 0.15 // 15% chance per grid cell
+
+function createTallGrassPatch(x, z) {
+    const patch = new THREE.Group()
+    patch.userData = {
+        position: new THREE.Vector3(x, 0, z),
+        radius: 4 + Math.random() * 3,
+        blades: []
+    }
+    
+    // Create many tall grass blades in a circular patch
+    const bladeCount = 30 + Math.floor(Math.random() * 20)
+    for (let i = 0; i < bladeCount; i++) {
+        const angle = Math.random() * Math.PI * 2
+        const distance = Math.random() * patch.userData.radius
+        const bladeX = Math.cos(angle) * distance
+        const bladeZ = Math.sin(angle) * distance
+        
+        const height = 1.5 + Math.random() * 0.8 // Much taller grass
+        const blade = createGrassBlade(bladeX, bladeZ, false)
+        blade.scale.y = height / 0.4 // Scale up the blade
+        
+        // Make it darker green
+        blade.material.color.setHSL(0.27, 0.7, 0.15)
+        
+        patch.add(blade)
+        patch.userData.blades.push(blade)
+    }
+    
+    patch.position.set(x, 0, z)
+    return patch
+}
+
+function generateTallGrassInCell(gridX, gridZ) {
+    const key = `${gridX},${gridZ}`
+    if (tallGrassPatchGrid.has(key)) return
+    
+    const seed = gridX * 5000 + gridZ * 9000
+    const random = () => {
+        const x = Math.sin(seed) * 10000
+        return x - Math.floor(x)
+    }
+    
+    if (random() < TALL_GRASS_DENSITY) {
+        const x = gridX * GRID_SIZE + (random() - 0.5) * GRID_SIZE
+        const z = gridZ * GRID_SIZE + (random() - 0.5) * GRID_SIZE
+        
+        // Check not too close to trees or rocks
+        let tooClose = false
+        if (treeGrid.has(key) || rockGrid.has(key) || logGrid.has(key)) {
+            tooClose = true
+        }
+        
+        if (!tooClose) {
+            const patch = createTallGrassPatch(x, z)
+            tallGrassPatches.push(patch)
+            tallGrassPatchGrid.set(key, patch.userData)
+            scene.add(patch)
+        }
+    }
+}
+
+// Generate initial tall grass
+function initializeTallGrass(playerX, playerZ) {
+    const playerGridX = Math.floor(playerX / GRID_SIZE)
+    const playerGridZ = Math.floor(playerZ / GRID_SIZE)
+    const gridRange = Math.ceil(VIEW_DISTANCE / GRID_SIZE)
+    
+    for (let dx = -gridRange; dx <= gridRange; dx++) {
+        for (let dz = -gridRange; dz <= gridRange; dz++) {
+            const gridX = playerGridX + dx
+            const gridZ = playerGridZ + dz
+            generateTallGrassInCell(gridX, gridZ)
+        }
+    }
+}
+
+initializeTallGrass(0, 10)
+
+// Function to check if player is in tall grass
+function checkIfInTallGrass(position) {
+    for (const patch of tallGrassPatches) {
+        const distance = Math.sqrt(
+            Math.pow(position.x - patch.userData.position.x, 2) +
+            Math.pow(position.z - patch.userData.position.z, 2)
+        )
+        if (distance <= patch.userData.radius) {
+            return true
+        }
+    }
+    return false
+}
+
 // Create dust/bug particle texture
 function createParticleTexture() {
     const canvas = document.createElement('canvas')
@@ -900,7 +1143,33 @@ const movement = {
     backward: false,
     left: false,
     right: false,
-    shift: false
+    shift: false,
+    crouch: false,
+    sprint: false
+}
+
+// Movement speeds and stamina system
+const movementSpeeds = {
+    crouch: 2,
+    walk: 4,
+    run: 8,
+    sprint: 12
+}
+
+const staminaSystem = {
+    current: 100,
+    max: 100,
+    sprintCost: 25, // stamina per second while sprinting
+    regenRate: 15, // stamina per second while not sprinting
+    minSprintStamina: 10 // minimum stamina needed to start sprinting
+}
+
+// Player state
+const playerState = {
+    stance: 'standing', // 'crouching' or 'standing'
+    isInGrass: false,
+    noiseLevel: 0, // 0-1, affects detection
+    visibilityMultiplier: 1 // affects detection range
 }
 
 const playerVelocity = new THREE.Vector3()
@@ -1217,12 +1486,12 @@ class CreepyFigure {
         this.idleTime = 3 + Math.random() * 4 // Stand still for 3-7 seconds
         this.wanderSpeed = 2
         this.chaseSpeed = 8
-        this.detectionRange = 20 // Reduced from 40 - much closer detection
+        this.detectionRange = 45 // Increased from 20 to 45 - much longer vision
         this.canSeePlayer = false
         this.isMoving = false
         
         // Add spawn delay so player can observe behavior
-        this.spawnDelay = 10 // 10 seconds before he can detect player
+        this.spawnDelay = 15 // Increased from 10 to 15 seconds before he can detect player
         this.gameStartTime = performance.now()
         this.detectionActive = false // Track if detection has been activated
         
@@ -1863,6 +2132,27 @@ class CreepyFigure {
         const direction = playerPos.clone().sub(creepPos).normalize()
         const distance = creepPos.distanceTo(playerPos)
         
+        // Apply visibility modifiers based on player state
+        let effectiveDetectionRange = this.detectionRange
+        
+        // Crouch reduces detection range by 50%
+        if (playerState.stance === 'crouching') {
+            effectiveDetectionRange *= 0.5
+        }
+        
+        // Being in tall grass while crouching makes you nearly invisible
+        if (playerState.isInGrass && playerState.stance === 'crouching') {
+            effectiveDetectionRange *= 0.1 // 90% reduction
+        }
+        
+        // Noise increases detection range
+        effectiveDetectionRange *= (1 + playerState.noiseLevel * 0.5)
+        
+        // Distance check with modified range
+        if (distance > effectiveDetectionRange) {
+            return false
+        }
+        
         // Set raycaster from creep position towards player
         this.raycaster.set(creepPos.clone().add(new THREE.Vector3(0, 1, 0)), direction)
         
@@ -1893,7 +2183,7 @@ class CreepyFigure {
             return false
         }
         
-        return distance <= this.detectionRange
+        return true
     }
     
     update(deltaTime, playerPosition) {
@@ -2135,11 +2425,11 @@ creepyFigure.spawnAtRandomLocation()
 // ---------- Multiple Creepers System ----------
 const creepers = new Map()
 const creeperGrid = new Map()
-const CREEPER_DENSITY = 0.08 // Increased back to 8% for more spawns
+const CREEPER_DENSITY = 0.18 // Increased from 0.08 to 0.18 (18% spawn chance)
 const CREEPER_GRID_SIZE = 20 // Keep larger grid for spacing
-const CREEPER_VIEW_DISTANCE = 120 // Slightly further view distance
-const MAX_ACTIVE_CREEPERS = 8 // Increased back to 8
-const MIN_SPAWN_DISTANCE = 40 // Reduced from 60 to 40 units
+const CREEPER_VIEW_DISTANCE = 150 // Increased from 120 to 150
+const MAX_ACTIVE_CREEPERS = 20 // Increased from 8 to 20
+const MIN_SPAWN_DISTANCE = 30 // Reduced from 40 to 30 units
 
 // Global creeper ID counter
 let nextCreeperId = 1
@@ -2220,9 +2510,9 @@ function generateCreepersInCell(gridX, gridZ, playerX = 0, playerZ = 10) {
                 creeper.initiallyVisible = false // Start invisible
                 creeper.fadeInDelay = 1 + Math.random() * 2
                 creeper.fadeStartTime = performance.now() + creeper.fadeInDelay * 1000
-                creeper.spawnDelay = 5 + Math.random() * 8
+                creeper.spawnDelay = 15 + Math.random() * 10 // Increased from 5-8 to 15-25 seconds
                 creeper.gameStartTime = performance.now() + creeper.fadeInDelay * 1000
-                creeper.detectionRange = 15 + Math.random() * 10
+                creeper.detectionRange = 35 + Math.random() * 15 // Increased from 15-25 to 35-50
                 
                 // Store creeper
                 creepers.set(key, creeper)
@@ -2444,7 +2734,22 @@ document.addEventListener('keydown', (e) => {
         case 's': movement.backward = true; break
         case 'a': movement.left = true; break
         case 'd': movement.right = true; break
-        case 'shift': movement.shift = true; break
+        case 'shift': 
+            movement.shift = true
+            // Can only sprint if standing and have enough stamina
+            if (playerState.stance === 'standing' && staminaSystem.current >= staminaSystem.minSprintStamina) {
+                movement.sprint = true
+            }
+            break
+        case 'c': 
+            movement.crouch = !movement.crouch
+            playerState.stance = movement.crouch ? 'crouching' : 'standing'
+            // Can't sprint while crouching
+            if (movement.crouch) {
+                movement.sprint = false
+            }
+            console.log(`${movement.crouch ? '🦆 Crouching' : '🚶 Standing'}`)
+            break
         case 'f': // Debug: force figure to appear
             creepyFigure.forceAppear()
             console.log('Forced creepy figure to appear')
@@ -2612,7 +2917,10 @@ document.addEventListener('keyup', (e) => {
         case 's': movement.backward = false; break
         case 'a': movement.left = false; break
         case 'd': movement.right = false; break
-        case 'shift': movement.shift = false; break
+        case 'shift': 
+            movement.shift = false
+            movement.sprint = false
+            break
     }
 })
 
@@ -2668,13 +2976,150 @@ function animate() {
     // Update dynamic heartbeat speed based on closest creeper
     updateHeartbeatSpeed()
     
+    // Calculate danger level and update visual indicator
+    let dangerLevel = 0 // 0 = safe, 1 = max danger
+    let nearbyCreepers = 0
+    let chasingCreepers = 0
+    let closestCreeperDistance = Infinity
+    
+    // Check main creeper
+    if (creepyFigure && creepyFigure.position) {
+        const distance = creepyFigure.position.distanceTo(cameraGroup.position)
+        closestCreeperDistance = Math.min(closestCreeperDistance, distance)
+        
+        if (distance < 60) nearbyCreepers++
+        if (creepyFigure.state === 'chasing') chasingCreepers++
+        if (creepyFigure.canSeePlayer) dangerLevel = Math.max(dangerLevel, 0.5)
+    }
+    
+    // Check all other creepers
+    for (const [key, creeper] of creepers.entries()) {
+        if (creeper && creeper.position) {
+            const distance = creeper.position.distanceTo(cameraGroup.position)
+            closestCreeperDistance = Math.min(closestCreeperDistance, distance)
+            
+            if (distance < 60) nearbyCreepers++
+            if (creeper.state === 'chasing') chasingCreepers++
+            if (creeper.canSeePlayer) dangerLevel = Math.max(dangerLevel, 0.5)
+        }
+    }
+    
+    // Calculate danger level based on various factors
+    if (chasingCreepers > 0) {
+        dangerLevel = Math.max(dangerLevel, 0.7 + (chasingCreepers - 1) * 0.1)
+    } else if (nearbyCreepers > 0) {
+        dangerLevel = Math.max(dangerLevel, 0.2 + nearbyCreepers * 0.05)
+    }
+    
+    // Distance factor
+    if (closestCreeperDistance < 10) {
+        dangerLevel = Math.max(dangerLevel, 0.8)
+    } else if (closestCreeperDistance < 30) {
+        dangerLevel = Math.max(dangerLevel, 0.4)
+    }
+    
+    // Update danger overlay
+    if (dangerOverlay) {
+        const targetOpacity = dangerLevel
+        const currentOpacity = parseFloat(dangerOverlay.style.opacity) || 0
+        const newOpacity = currentOpacity + (targetOpacity - currentOpacity) * 0.1
+        dangerOverlay.style.opacity = newOpacity
+        
+        // Pulse effect when in extreme danger
+        if (chasingCreepers >= 2 || closestCreeperDistance < 5) {
+            const pulseIntensity = Math.sin(time * 8) * 0.2 + 0.8
+            dangerOverlay.style.background = `radial-gradient(ellipse at center, transparent 0%, transparent 30%, rgba(255, 0, 0, ${0.5 * pulseIntensity}) 100%)`
+        } else {
+            dangerOverlay.style.background = `radial-gradient(ellipse at center, transparent 0%, transparent 40%, rgba(255, 0, 0, 0.3) 100%)`
+        }
+    }
+    
+    // Update UI info with current state
+    const infoElement = document.getElementById('info')
+    if (infoElement && !objective.completed) {
+        let statusText = 'SURVIVE THE FOREST<br>Reach the yellow marker'
+        
+        if (playerState.isInGrass && playerState.stance === 'crouching') {
+            statusText += '<br><span style="color: #00ff00;">HIDDEN IN GRASS</span>'
+        } else if (playerState.stance === 'crouching') {
+            statusText += '<br><span style="color: #ffff00;">CROUCHING</span>'
+        }
+        
+        if (chasingCreepers > 0) {
+            statusText += `<br><span style="color: #ff0000;">BEING CHASED BY ${chasingCreepers}!</span>`
+        }
+        
+        infoElement.innerHTML = statusText
+    }
+    
+    // Check objective completion
+    checkObjectiveCompletion()
+    
+    // Update objective marker pulsing effect
+    if (objective.marker && !objective.completed) {
+        const pulseIntensity = objective.marker.userData.originalEmissiveIntensity + 
+            Math.sin(time * objective.marker.userData.pulseSpeed * 1000) * 0.3
+        objective.marker.material.emissiveIntensity = Math.max(0.2, pulseIntensity)
+    }
+    
     // Update camera rotation from mouse
     camera.rotation.order = 'YXZ'
     camera.rotation.y = THREE.MathUtils.degToRad(-lon)
     camera.rotation.x = THREE.MathUtils.degToRad(lat)
     
     // Update player movement
-    const speed = movement.shift ? 4 : 8
+    let currentSpeed = movementSpeeds.walk // Default walk speed
+    
+    // Determine current speed based on stance and input
+    if (playerState.stance === 'crouching') {
+        currentSpeed = movementSpeeds.crouch
+        playerState.noiseLevel = 0.1 // Very quiet
+        cameraGroup.position.y = 1.2 // Lower camera when crouching
+    } else {
+        cameraGroup.position.y = 2.2 // Normal camera height
+        
+        if (movement.sprint && staminaSystem.current > 0) {
+            currentSpeed = movementSpeeds.sprint
+            playerState.noiseLevel = 1.0 // Very loud
+            // Drain stamina
+            staminaSystem.current = Math.max(0, staminaSystem.current - staminaSystem.sprintCost * delta)
+            
+            // Stop sprinting if out of stamina
+            if (staminaSystem.current === 0) {
+                movement.sprint = false
+                console.log('😮‍💨 Out of stamina!')
+            }
+        } else if (movement.shift && !movement.crouch) {
+            currentSpeed = movementSpeeds.run
+            playerState.noiseLevel = 0.5 // Moderate noise
+        } else {
+            currentSpeed = movementSpeeds.walk
+            playerState.noiseLevel = 0.3 // Low noise
+        }
+    }
+    
+    // Regenerate stamina when not sprinting
+    if (!movement.sprint) {
+        staminaSystem.current = Math.min(staminaSystem.max, staminaSystem.current + staminaSystem.regenRate * delta)
+    }
+    
+    // Update stamina bar
+    if (staminaFill) {
+        staminaFill.style.width = `${(staminaSystem.current / staminaSystem.max) * 100}%`
+        // Change color based on stamina level
+        if (staminaSystem.current < 30) {
+            staminaFill.style.background = 'linear-gradient(to right, #ff0000, #ff6600)'
+        } else if (staminaSystem.current < 60) {
+            staminaFill.style.background = 'linear-gradient(to right, #ff6600, #ffff00)'
+        } else {
+            staminaFill.style.background = 'linear-gradient(to right, #00ff00, #ffff00)'
+        }
+    }
+    
+    // Show/hide stamina bar based on stamina level
+    if (staminaBar) {
+        staminaBar.style.opacity = staminaSystem.current < staminaSystem.max ? '1' : '0'
+    }
     
     playerDirection.set(0, 0, 0)
     
@@ -2698,12 +3143,15 @@ function animate() {
     // Apply movement with collision detection
     if (playerDirection.length() > 0) {
         const newPosition = cameraGroup.position.clone()
-        newPosition.x += playerDirection.x * speed * delta
-        newPosition.z += playerDirection.z * speed * delta
+        newPosition.x += playerDirection.x * currentSpeed * delta
+        newPosition.z += playerDirection.z * currentSpeed * delta
         
         if (!checkCollision(newPosition)) {
             cameraGroup.position.x = newPosition.x
             cameraGroup.position.z = newPosition.z
+            
+            // Check if player is in tall grass
+            playerState.isInGrass = checkIfInTallGrass(cameraGroup.position)
             
             // Update forest generation based on new position
             updateTrees(newPosition.x, newPosition.z)
@@ -2711,13 +3159,29 @@ function animate() {
             updateLogs(newPosition.x, newPosition.z)
             updateCreepers(newPosition.x, newPosition.z)
             
-            // Head bobbing
-            bobAmount += delta * 5
-            cameraGroup.position.y = 2.2 + Math.sin(bobAmount) * 0.05 // Updated from 1.7 to 2.2
+            // Update tall grass
+            const playerGridX = Math.floor(newPosition.x / GRID_SIZE)
+            const playerGridZ = Math.floor(newPosition.z / GRID_SIZE)
+            const gridRange = Math.ceil(VIEW_DISTANCE / GRID_SIZE)
+            
+            for (let dx = -gridRange; dx <= gridRange; dx++) {
+                for (let dz = -gridRange; dz <= gridRange; dz++) {
+                    generateTallGrassInCell(playerGridX + dx, playerGridZ + dz)
+                }
+            }
+            
+            // Head bobbing - adjust based on movement speed
+            const bobSpeed = currentSpeed / movementSpeeds.walk * 5
+            bobAmount += delta * bobSpeed
+            const baseHeight = playerState.stance === 'crouching' ? 1.2 : 2.2
+            cameraGroup.position.y = baseHeight + Math.sin(bobAmount) * 0.05 * (currentSpeed / movementSpeeds.walk)
             
             // Initialize audio on first movement
             initAudio()
         }
+    } else {
+        // Still noise decay
+        playerState.noiseLevel *= 0.9
     }
     
     // Animate dust particles

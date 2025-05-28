@@ -199,6 +199,9 @@ class Minimap {
         // Draw player dot first (so it appears behind creeper dots)
         this.drawPlayer()
         
+        // Draw objective point (always visible)
+        this.drawObjective()
+        
         // Update and draw creeper dots on top (now with dynamic positions)
         if (creepyFigure && creepers) {
             this.updateCreeperDots(currentTime, creepyFigure, creepers)
@@ -396,6 +399,55 @@ class Minimap {
         this.ctx.beginPath()
         this.ctx.arc(center, center, 10, 0, Math.PI * 2)
         this.ctx.fill()
+    }
+    
+    drawObjective() {
+        // Get objective position from global scope (passed from main.js)
+        if (typeof window !== 'undefined' && window.objective) {
+            const obj = window.objective
+            
+            // Don't draw if objective is completed
+            if (obj.completed) return
+            
+            const screenPos = this.worldToScreen(obj.position.x, obj.position.z)
+            
+            // Only draw if within screen bounds
+            if (screenPos.x >= 0 && screenPos.x <= this.size && 
+                screenPos.y >= 0 && screenPos.y <= this.size) {
+                
+                // Pulsing yellow objective dot
+                const pulseScale = 1 + Math.sin(performance.now() * 0.005) * 0.3
+                const radius = 5 * pulseScale
+                
+                // Outer glow
+                this.ctx.fillStyle = 'rgba(255, 255, 0, 0.4)'
+                this.ctx.beginPath()
+                this.ctx.arc(screenPos.x, screenPos.y, radius * 2, 0, Math.PI * 2)
+                this.ctx.fill()
+                
+                // Main dot
+                this.ctx.fillStyle = 'rgba(255, 255, 0, 0.9)'
+                this.ctx.beginPath()
+                this.ctx.arc(screenPos.x, screenPos.y, radius, 0, Math.PI * 2)
+                this.ctx.fill()
+                
+                // Bright center
+                this.ctx.fillStyle = 'rgba(255, 255, 150, 1.0)'
+                this.ctx.beginPath()
+                this.ctx.arc(screenPos.x, screenPos.y, radius * 0.4, 0, Math.PI * 2)
+                this.ctx.fill()
+                
+                // Add objective marker symbol (small cross)
+                this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)'
+                this.ctx.lineWidth = 2
+                this.ctx.beginPath()
+                this.ctx.moveTo(screenPos.x - 3, screenPos.y)
+                this.ctx.lineTo(screenPos.x + 3, screenPos.y)
+                this.ctx.moveTo(screenPos.x, screenPos.y - 3)
+                this.ctx.lineTo(screenPos.x, screenPos.y + 3)
+                this.ctx.stroke()
+            }
+        }
     }
     
     // Method to be called when lightning state changes

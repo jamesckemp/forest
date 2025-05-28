@@ -1,0 +1,1 @@
+// LightingManager class 

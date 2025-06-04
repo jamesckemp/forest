@@ -5,11 +5,11 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
 import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
-import { LightingManager, setupLighting } from './lighting.js'
+import { LightingManager, setupLighting } from './lighting/index.js'
 
 // Load minimap module
 const minimapScript = document.createElement('script')
-minimapScript.src = './minimap.js'
+minimapScript.src = '../src/ui/minimap.js'
 document.head.appendChild(minimapScript)
 
 // Test creeper for minimap debugging
@@ -1191,7 +1191,7 @@ function getGlobalScreamBuffer(audioContext) {
         isLoadingGlobalBuffer = true
         console.log('🔄 Loading global scream buffer...')
         
-        fetch('759456__akridiy__a-single-scream-of-a-young-male.wav')
+        fetch('assets/audio/759456__akridiy__a-single-scream-of-a-young-male.wav')
             .then(response => response.arrayBuffer())
             .then(data => audioContext.decodeAudioData(data))
             .then(buffer => {
@@ -1331,7 +1331,7 @@ function initAudio() {
     if (!audioInitialized) {
         try {
             if (!forestAudio) {
-                forestAudio = new Audio('410390__univ_lyon3__pantigny_jeanloup_2017_2018_heartbeatbreath.wav')
+                forestAudio = new Audio('assets/audio/410390__univ_lyon3__pantigny_jeanloup_2017_2018_heartbeatbreath.wav')
                 forestAudio.loop = true
                 forestAudio.volume = 1
                 
@@ -1508,7 +1508,7 @@ class CreepyFigure {
     
     loadIndividualBuffer() {
         // Fallback method - load individually if global buffer fails
-        fetch('759456__akridiy__a-single-scream-of-a-young-male.wav')
+        fetch('assets/audio/759456__akridiy__a-single-scream-of-a-young-male.wav')
             .then(response => response.arrayBuffer())
             .then(data => this.audioContext.decodeAudioData(data))
             .then(buffer => {
@@ -1542,7 +1542,7 @@ class CreepyFigure {
     
     initFallbackAudio() {
         try {
-            this.screamAudio = new Audio('759456__akridiy__a-single-scream-of-a-young-male.wav')
+            this.screamAudio = new Audio('assets/audio/759456__akridiy__a-single-scream-of-a-young-male.wav')
             this.screamAudio.preload = 'auto'
             this.screamAudio.volume = 0
             
@@ -1790,7 +1790,7 @@ class CreepyFigure {
     loadModel() {
         const loader = new GLTFLoader()
         
-        loader.load('./runner.glb', (gltf) => {
+        loader.load('assets/models/runner.glb', (gltf) => {
             this.figure = gltf.scene
             
             // Setup model properties - smaller scale and proper ground positioning

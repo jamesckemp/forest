@@ -5,96 +5,19 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
 import { FXAAShader } from 'three/examples/jsm/shaders/FXAAShader.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
+import { LightingManager, setupLighting } from './lighting/index.js'
 
 // Load minimap module
+import { objective, createObjectiveMarker, checkObjectiveCompletion } from "./ui/objective.js"
+import CreepyFigure from "./ai/creepyFigure.js"
+import { queueModelLoad } from "./ai/utils.js"
+import { setupPlayer } from "./player/controller.js"
+import { initAudio, tryStartAudio, setupAudioListeners, updateHeartbeatSpeed } from "./audio/soundManager.js"
 const minimapScript = document.createElement('script')
-minimapScript.src = './minimap.js'
+minimapScript.src = '../src/ui/minimap.js'
 document.head.appendChild(minimapScript)
 
-// Test creeper for minimap debugging
-let testCreeper = null
 
-// Objective system
-const objective = {
-    position: { x: 350, z: 350 }, // Far from spawn point (0, 10) - increased from 150 to 350
-    radius: 5, // How close you need to get to complete
-    completed: false,
-    marker: null
-}
-
-// Create objective marker in the world
-function createObjectiveMarker() {
-    const markerGeometry = new THREE.CylinderGeometry(2, 2, 8, 8)
-    const markerMaterial = new THREE.MeshBasicMaterial({ 
-        color: 0xffff00,
-        emissive: 0xffff00,
-        emissiveIntensity: 0.5
-    })
-    const marker = new THREE.Mesh(markerGeometry, markerMaterial)
-    marker.position.set(objective.position.x, 4, objective.position.z)
-    marker.castShadow = true
-    
-    // Add pulsing glow effect
-    marker.userData = {
-        originalEmissiveIntensity: 0.5,
-        pulseSpeed: 0.003
-    }
-    
-    objective.marker = marker
-    scene.add(marker)
-    
-    console.log(`🎯 Objective marker placed at (${objective.position.x}, ${objective.position.z})`)
-    console.log(`📏 Distance from spawn: ${Math.sqrt(Math.pow(objective.position.x, 2) + Math.pow(objective.position.z - 10, 2)).toFixed(1)} units`)
-}
-
-// Check if player has reached the objective
-function checkObjectiveCompletion() {
-    if (objective.completed) return
-    
-    const distance = Math.sqrt(
-        Math.pow(cameraGroup.position.x - objective.position.x, 2) + 
-        Math.pow(cameraGroup.position.z - objective.position.z, 2)
-    )
-    
-    if (distance <= objective.radius) {
-        objective.completed = true
-        console.log('🎉 OBJECTIVE COMPLETED! You survived the forest!')
-        
-        // Show completion message
-        const completionDiv = document.createElement('div')
-        completionDiv.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(0, 255, 0, 0.9);
-            color: black;
-            padding: 20px;
-            border-radius: 10px;
-            font-size: 24px;
-            font-weight: bold;
-            z-index: 2000;
-            text-align: center;
-        `
-        completionDiv.innerHTML = `
-            🎉 MISSION COMPLETE! 🎉<br>
-            You survived the forest!<br>
-            <small>Press R to restart</small>
-        `
-        document.body.appendChild(completionDiv)
-        
-        // Add restart functionality
-        const restartHandler = (e) => {
-            if (e.key.toLowerCase() === 'r') {
-                location.reload()
-            }
-        }
-        document.addEventListener('keydown', restartHandler)
-    }
-}
-
-// Make objective available globally for minimap
-window.objective = objective
 
 // Scene setup
 const scene = new THREE.Scene()
@@ -108,6 +31,7 @@ renderer.toneMappingExposure = 1.2
 document.body.appendChild(renderer.domElement)
 
 // Create danger indicator overlay
+const player = setupPlayer(scene, camera, renderer, treeGrid, rockGrid, GRID_SIZE)
 const dangerOverlay = document.createElement('div')
 dangerOverlay.id = 'danger-overlay'
 dangerOverlay.style.cssText = `
@@ -153,6 +77,7 @@ document.body.appendChild(staminaBar)
 // Initialize objective marker
 createObjectiveMarker()
 
+setupAudioListeners()
 // Hide loader and show info when ready
 setTimeout(() => {
     document.getElementById('loader').style.display = 'none'
@@ -182,84 +107,8 @@ setTimeout(() => {
 scene.fog = new THREE.Fog(0x0e101a, 5, 80)
 scene.background = new THREE.Color(0x0e101a)
 
-// Lighting
-const ambientLight = new THREE.AmbientLight(0x1a1e2f, 0.08)
-scene.add(ambientLight)
-
-const sunLight = new THREE.DirectionalLight(0xcad7ff, 0.4)
-sunLight.position.set(800, 200, 600)
-sunLight.target.position.set(0, 0, 0)
-sunLight.castShadow = true
-sunLight.shadow.mapSize.width = 4096
-sunLight.shadow.mapSize.height = 4096
-sunLight.shadow.camera.near = 0.1
-sunLight.shadow.camera.far = 3000
-sunLight.shadow.camera.left = -200
-sunLight.shadow.camera.right = 200
-sunLight.shadow.camera.top = 200
-sunLight.shadow.camera.bottom = -200
-sunLight.shadow.bias = -0.0001
-scene.add(sunLight)
-scene.add(sunLight.target)
-
-// Lightning flash light (starts off)
-const lightningLight = new THREE.DirectionalLight(0xffffff, 0)
-lightningLight.position.set(0, 500, 0)
-scene.add(lightningLight)
-
-// Volumetric light rays helper
-const rayLight = new THREE.DirectionalLight(0xFFB85F, 0.3)
-rayLight.position.copy(sunLight.position)
-scene.add(rayLight)
-
-// Create feathered sun texture
-function createSunTexture() {
-    const canvas = document.createElement('canvas')
-    canvas.width = 256
-    canvas.height = 256
-    const ctx = canvas.getContext('2d')
-    
-    const centerX = canvas.width / 2
-    const centerY = canvas.height / 2
-    const radius = canvas.width / 2
-    
-    // Create warm, soft radial gradient
-    const gradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius)
-    gradient.addColorStop(0, 'rgba(255, 180, 120, 0.9)')
-    gradient.addColorStop(0.2, 'rgba(255, 150, 80, 0.8)')
-    gradient.addColorStop(0.5, 'rgba(255, 120, 60, 0.6)')
-    gradient.addColorStop(0.7, 'rgba(255, 100, 40, 0.4)')
-    gradient.addColorStop(0.9, 'rgba(255, 80, 20, 0.2)')
-    gradient.addColorStop(1.0, 'rgba(255, 60, 0, 0)')
-    
-    ctx.fillStyle = gradient
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
-    
-    return new THREE.CanvasTexture(canvas)
-}
-
-// Create soft, feathered sun using sprite
-const sunTexture = createSunTexture()
-const sunMaterial = new THREE.SpriteMaterial({
-    map: sunTexture,
-    color: 0xFF6B35,
-    fog: false,
-    toneMapped: false,
-    transparent: true,
-    blending: THREE.AdditiveBlending
-})
-
-const sun = new THREE.Sprite(sunMaterial)
-sun.scale.set(80, 80, 1)
-sun.position.copy(sunLight.position)
-sun.layers.enable(1)
-scene.add(sun)
-// Hide sun sprite for night scene
-sun.visible = false
-
-// Add additional fog layer for depth
-const fogColor = new THREE.Color(0xFFE4B5)
-renderer.setClearColor(fogColor, 0.8)
+// Initialize lighting
+const { lightningLight } = setupLighting(scene, renderer)
 
 // Generate ground texture
 function generateGroundTexture() {
@@ -1138,410 +987,8 @@ const extraMaterial = new THREE.PointsMaterial({
 const extraParticleSystem = new THREE.Points(extraGeometry, extraMaterial)
 scene.add(extraParticleSystem)
 
-// Player controls
-const cameraGroup = new THREE.Group()
-cameraGroup.add(camera)
-cameraGroup.position.set(0, 2.2, 10) // Raised from 1.7 to 2.2
-scene.add(cameraGroup)
 
-// Add hemisphere light for general ambient around player
-const playerAmbient = new THREE.HemisphereLight(0xFFE4B5, 0x3B5323, 0.4)
-cameraGroup.add(playerAmbient)
 
-const movement = {
-    forward: false,
-    backward: false,
-    left: false,
-    right: false,
-    shift: false,
-    crouch: false,
-    sprint: false
-}
-
-// Movement speeds and stamina system
-const movementSpeeds = {
-    crouch: 2,
-    walk: 4,
-    run: 8,
-    sprint: 12
-}
-
-const staminaSystem = {
-    current: 100,
-    max: 100,
-    sprintCost: 25, // stamina per second while sprinting
-    regenRate: 15, // stamina per second while not sprinting
-    minSprintStamina: 10 // minimum stamina needed to start sprinting
-}
-
-// Player state
-const playerState = {
-    stance: 'standing', // 'crouching' or 'standing'
-    isInGrass: false,
-    noiseLevel: 0, // 0-1, affects detection
-    visibilityMultiplier: 1 // affects detection range
-}
-
-const playerVelocity = new THREE.Vector3()
-const playerDirection = new THREE.Vector3()
-
-// Mouse controls
-let lat = 0
-let lon = 0
-
-document.addEventListener('mousemove', (e) => {
-    if (document.pointerLockElement === renderer.domElement) {
-        lon += e.movementX * 0.2
-        lat -= e.movementY * 0.2
-        lat = Math.max(-85, Math.min(85, lat))
-    }
-})
-
-renderer.domElement.addEventListener('click', () => {
-    renderer.domElement.requestPointerLock()
-})
-
-// Collision detection
-function checkCollision(position) {
-    const playerGridX = Math.floor(position.x / GRID_SIZE)
-    const playerGridZ = Math.floor(position.z / GRID_SIZE)
-    
-    for (let dx = -1; dx <= 1; dx++) {
-        for (let dz = -1; dz <= 1; dz++) {
-            const key = `${playerGridX + dx},${playerGridZ + dz}`
-            
-            if (treeGrid.has(key)) {
-                const treePos = treeGrid.get(key)
-                const distance = Math.sqrt(
-                    Math.pow(position.x - treePos.x, 2) + 
-                    Math.pow(position.z - treePos.z, 2)
-                )
-                if (distance < treePos.radius + 1) {
-                    return true
-                }
-            }
-            
-            if (rockGrid.has(key)) {
-                const rock = rockGrid.get(key)
-                const distance = position.distanceTo(rock.position)
-                if (distance < rock.radius + 1) {
-                    return true
-                }
-            }
-        }
-    }
-    
-    return false
-}
-
-// Global shared audio buffer for screams (simpler approach)
-let globalScreamBuffer = null
-let isLoadingGlobalBuffer = false
-
-// Function to get or load the global scream buffer
-function getGlobalScreamBuffer(audioContext) {
-    return new Promise((resolve, reject) => {
-        // If we already have the buffer, return it immediately
-        if (globalScreamBuffer) {
-            resolve(globalScreamBuffer)
-            return
-        }
-        
-        // If already loading, wait for it
-        if (isLoadingGlobalBuffer) {
-            const checkBuffer = () => {
-                if (globalScreamBuffer) {
-                    resolve(globalScreamBuffer)
-                } else if (!isLoadingGlobalBuffer) {
-                    reject(new Error('Buffer loading failed'))
-                } else {
-                    setTimeout(checkBuffer, 100)
-                }
-            }
-            checkBuffer()
-            return
-        }
-        
-        // Start loading
-        isLoadingGlobalBuffer = true
-        console.log('🔄 Loading global scream buffer...')
-        
-        fetch('759456__akridiy__a-single-scream-of-a-young-male.wav')
-            .then(response => response.arrayBuffer())
-            .then(data => audioContext.decodeAudioData(data))
-            .then(buffer => {
-                globalScreamBuffer = buffer
-                isLoadingGlobalBuffer = false
-                console.log('✅ Global scream buffer loaded - will be reused by all creepers')
-                resolve(buffer)
-            })
-            .catch(error => {
-                isLoadingGlobalBuffer = false
-                console.log(`❌ Failed to load global scream buffer: ${error.message}`)
-                reject(error)
-            })
-    })
-}
-
-// Global model loading queue to prevent simultaneous loads
-let modelLoadingQueue = []
-let isLoadingModel = false
-
-function queueModelLoad(creeper) {
-    modelLoadingQueue.push(creeper)
-    processModelQueue()
-}
-
-function processModelQueue() {
-    if (isLoadingModel || modelLoadingQueue.length === 0) return
-    
-    isLoadingModel = true
-    const nextCreeper = modelLoadingQueue.shift()
-    
-    console.log(`🔄 Loading model for creeper #${nextCreeper.id || 'main'} (${modelLoadingQueue.length} remaining in queue)`)
-    
-    // Start loading this creeper's model
-    nextCreeper.loadModelNow()
-}
-
-function onModelLoadComplete() {
-    isLoadingModel = false
-    // Process next in queue after a small delay to prevent performance spikes
-    setTimeout(() => {
-        processModelQueue()
-    }, 100) // 100ms delay between model loads
-}
-
-// Audio system
-let audioInitialized = false
-let forestAudio = null
-let baseHeartbeatRate = 1.0 // Normal heartbeat speed
-let currentHeartbeatRate = 1.0
-let targetHeartbeatRate = 1.0
-
-function updateHeartbeatSpeed() {
-    if (!forestAudio || forestAudio.paused || forestAudio.ended) return
-    
-    // Find the closest creeper to the player
-    let closestDistance = Infinity
-    const playerPos = cameraGroup.position
-    
-    // Check main creepy figure
-    if (creepyFigure && creepyFigure.position) {
-        const distance = Math.sqrt(
-            Math.pow(creepyFigure.position.x - playerPos.x, 2) + 
-            Math.pow(creepyFigure.position.z - playerPos.z, 2)
-        )
-        closestDistance = Math.min(closestDistance, distance)
-    }
-    
-    // Check all other creepers
-    for (const [key, creeper] of creepers.entries()) {
-        if (creeper && creeper.position) {
-            const distance = Math.sqrt(
-                Math.pow(creeper.position.x - playerPos.x, 2) + 
-                Math.pow(creeper.position.z - playerPos.z, 2)
-            )
-            closestDistance = Math.min(closestDistance, distance)
-        }
-    }
-    
-    // Calculate target heartbeat rate based on closest distance
-    if (closestDistance === Infinity) {
-        // No creepers nearby - normal heartbeat
-        targetHeartbeatRate = baseHeartbeatRate
-    } else {
-        // Map distance to heartbeat rate
-        const maxDistance = 50 // Distance at which heartbeat is normal
-        const minDistance = 5  // Distance at which heartbeat is fastest
-        const maxRate = 3.6    // Further reduced from 1.8 to 1.6 to prevent clipping
-        
-        if (closestDistance >= maxDistance) {
-            targetHeartbeatRate = baseHeartbeatRate
-        } else if (closestDistance <= minDistance) {
-            targetHeartbeatRate = baseHeartbeatRate * maxRate
-        } else {
-            // Linear interpolation between min and max
-            const normalizedDistance = (closestDistance - minDistance) / (maxDistance - minDistance)
-            const rateMultiplier = maxRate - (normalizedDistance * (maxRate - 1))
-            targetHeartbeatRate = baseHeartbeatRate * rateMultiplier
-        }
-    }
-    
-    // Use extremely gentle transitions to prevent any audio artifacts
-    const rateDifference = Math.abs(currentHeartbeatRate - targetHeartbeatRate)
-    
-    // Much smaller increments to prevent clipping
-    let transitionSpeed = 0.001 // Very small base increment
-    
-    if (Math.abs(currentHeartbeatRate - targetHeartbeatRate) > 0.001) {
-        if (currentHeartbeatRate < targetHeartbeatRate) {
-            currentHeartbeatRate = Math.min(targetHeartbeatRate, currentHeartbeatRate + transitionSpeed)
-        } else {
-            currentHeartbeatRate = Math.max(targetHeartbeatRate, currentHeartbeatRate - transitionSpeed)
-        }
-        
-        // Apply the new playback rate very conservatively
-        const clampedRate = Math.max(0.8, Math.min(1.8, currentHeartbeatRate))
-        
-        // Only change rate if the difference is meaningful and audio is stable
-        if (Math.abs(forestAudio.playbackRate - clampedRate) > 0.005) {
-            try {
-                forestAudio.playbackRate = clampedRate
-            } catch (error) {
-                // Fallback if playbackRate change fails
-                console.log('⚠️ Playback rate change failed, resetting to 1.0')
-                forestAudio.playbackRate = 1.0
-                currentHeartbeatRate = 1.0
-                targetHeartbeatRate = 1.0
-            }
-        }
-        
-        // Debug logging (uncomment to see heartbeat changes)
-        // console.log(`💓 Heartbeat: ${currentHeartbeatRate.toFixed(3)}x (target: ${targetHeartbeatRate.toFixed(3)}x, closest: ${closestDistance.toFixed(1)}m)`)
-    }
-}
-
-function initAudio() {
-    if (!audioInitialized) {
-        try {
-            if (!forestAudio) {
-                forestAudio = new Audio('410390__univ_lyon3__pantigny_jeanloup_2017_2018_heartbeatbreath.wav')
-                forestAudio.loop = true
-                forestAudio.volume = 1
-                
-                forestAudio.addEventListener('loadstart', () => console.log('Heartbeat/breath audio loading started'))
-                forestAudio.addEventListener('canplay', () => console.log('Heartbeat/breath audio can play'))
-                forestAudio.addEventListener('playing', () => console.log('Heartbeat/breath audio is now playing'))
-                forestAudio.addEventListener('error', (e) => console.log('Heartbeat/breath audio error:', e))
-            }
-            
-            // Removed ambient audio initialization
-            
-            forestAudio.play().then(() => {
-                console.log('✅ Heartbeat/breath audio successfully started!')
-                audioInitialized = true
-                removeAudioListeners()
-            }).catch(e => {
-                console.log('❌ Audio play failed:', e.message)
-                forestAudio.play().catch(e => console.log('Heartbeat/breath audio failed:', e.message))
-            })
-            
-        } catch (error) {
-            console.log('❌ Could not load audio files:', error)
-        }
-    }
-}
-
-initAudio()
-
-function tryStartAudio() {
-    if (audioInitialized || (forestAudio && !forestAudio.paused)) {
-        console.log('🎵 Audio already playing - ignoring interaction')
-        removeAudioListeners()
-        return
-    }
-    console.log('🔊 User interaction detected - attempting to start audio...')
-    initAudio()
-}
-
-document.addEventListener('click', tryStartAudio)
-document.addEventListener('keydown', tryStartAudio)
-document.addEventListener('touchstart', tryStartAudio)
-
-function removeAudioListeners() {
-    if (audioInitialized && forestAudio && !forestAudio.paused) {
-        document.removeEventListener('click', tryStartAudio)
-        document.removeEventListener('keydown', tryStartAudio)
-        document.removeEventListener('touchstart', tryStartAudio)
-        console.log('🎵 Audio listeners removed - heartbeat/breath is playing')
-    }
-}
-
-setInterval(() => {
-    if (forestAudio && !forestAudio.paused && !audioInitialized) {
-        audioInitialized = true
-        removeAudioListeners()
-    }
-}, 2000)
-
-// Animation variables
-let time = 0
-let bobAmount = 0
-
-// Timer handle
-const timerElement = document.getElementById('timer')
-const startTime = performance.now()
-
-// ---------- Creepy Figure System ----------
-class CreepyFigure {
-    constructor(scene, camera) {
-        this.scene = scene
-        this.camera = camera
-        this.figure = null
-        this.mixer = null
-        this.playerPosition = new THREE.Vector3()
-        this.raycaster = new THREE.Raycaster()
-        this.groundOffset = 0 // Will be set when model loads
-        
-        // AI States: idle, wandering, chasing
-        this.state = 'idle'
-        this.stateTimer = 0
-        this.position = new THREE.Vector3()
-        this.targetPosition = new THREE.Vector3()
-        this.velocity = new THREE.Vector3()
-        this.lastKnownPlayerPosition = new THREE.Vector3()
-        
-        // Behavior parameters
-        this.idleTime = 3 + Math.random() * 4 // Stand still for 3-7 seconds
-        this.wanderSpeed = 2
-        this.chaseSpeed = 8
-        this.detectionRange = 45 // Increased from 20 to 45 - much longer vision
-        this.canSeePlayer = false
-        this.isMoving = false
-        
-        // Add spawn delay so player can observe behavior
-        this.spawnDelay = 15 // Increased from 10 to 15 seconds before he can detect player
-        this.gameStartTime = performance.now()
-        this.detectionActive = false // Track if detection has been activated
-        
-        // Enhanced scream audio system with Web Audio API
-        this.audioContext = null
-        this.screamBuffer = null
-        this.screamSource = null
-        this.gainNode = null
-        this.pitchShiftNode = null
-        this.isScreaming = false
-        this.screamCooldown = 0
-        this.minScreamInterval = 2 // Minimum seconds between screams
-        this.maxScreamInterval = 5 // Maximum seconds between screams
-        this.nextScreamTime = 0
-        this.baseScreamVolume = 6.0 // Increased from 4.0 to 6.0
-        this.maxScreamDistance = 25 // Reduced from 30 to 25 units
-        this.minScreamDistance = 3  // Reduced from 5 to 3 units
-        
-        this.initScreamAudio()
-        this.queueModelLoad()
-    }
-    
-    initScreamAudio() {
-        try {
-            // Each creeper gets its own audio context (prevents context conflicts)
-            this.audioContext = new (window.AudioContext || window.webkitAudioContext)()
-            
-            // Create gain node for volume control
-            this.gainNode = this.audioContext.createGain()
-            this.gainNode.gain.value = 0
-            
-            // Create reverb effect
-            this.reverbNode = this.audioContext.createConvolver()
-            this.createReverbImpulse()
-            
-            // Create 3D panner for positional audio
-            this.pannerNode = this.audioContext.createPanner()
-            this.pannerNode.panningModel = 'HRTF'
-            this.pannerNode.distanceModel = 'inverse'
-            this.pannerNode.refDistance = 1
             this.pannerNode.maxDistance = 25 // Reduced from 50 to match scream distance
             this.pannerNode.rolloffFactor = 1.5 // Reduced from 2 for less aggressive falloff
             this.pannerNode.coneInnerAngle = 360
@@ -1583,7 +1030,7 @@ class CreepyFigure {
     
     loadIndividualBuffer() {
         // Fallback method - load individually if global buffer fails
-        fetch('759456__akridiy__a-single-scream-of-a-young-male.wav')
+        fetch('assets/audio/759456__akridiy__a-single-scream-of-a-young-male.wav')
             .then(response => response.arrayBuffer())
             .then(data => this.audioContext.decodeAudioData(data))
             .then(buffer => {
@@ -1617,7 +1064,7 @@ class CreepyFigure {
     
     initFallbackAudio() {
         try {
-            this.screamAudio = new Audio('759456__akridiy__a-single-scream-of-a-young-male.wav')
+            this.screamAudio = new Audio('assets/audio/759456__akridiy__a-single-scream-of-a-young-male.wav')
             this.screamAudio.preload = 'auto'
             this.screamAudio.volume = 0
             
@@ -1865,7 +1312,7 @@ class CreepyFigure {
     loadModel() {
         const loader = new GLTFLoader()
         
-        loader.load('./runner.glb', (gltf) => {
+        loader.load('assets/models/runner.glb', (gltf) => {
             this.figure = gltf.scene
             
             // Setup model properties - smaller scale and proper ground positioning
@@ -2028,7 +1475,7 @@ class CreepyFigure {
         }
     }
     
-    // Get appropriate animation based on movement speed and state
+    // Get appropriate animation based on player.movement speed and state
     getAnimationForState(speed, stateType) {
         // Define animation priorities (try these names in order)
         const animationMap = {
@@ -2146,17 +1593,17 @@ class CreepyFigure {
         let effectiveDetectionRange = this.detectionRange
         
         // Crouch reduces detection range by 50%
-        if (playerState.stance === 'crouching') {
+        if (player.playerState.stance === 'crouching') {
             effectiveDetectionRange *= 0.5
         }
         
         // Being in tall grass while crouching makes you nearly invisible
-        if (playerState.isInGrass && playerState.stance === 'crouching') {
+        if (player.playerState.isInGrass && player.playerState.stance === 'crouching') {
             effectiveDetectionRange *= 0.1 // 90% reduction
         }
         
         // Noise increases detection range
-        effectiveDetectionRange *= (1 + playerState.noiseLevel * 0.5)
+        effectiveDetectionRange *= (1 + player.playerState.noiseLevel * 0.5)
         
         // Distance check with modified range
         if (distance > effectiveDetectionRange) {
@@ -2288,7 +1735,7 @@ class CreepyFigure {
                     this.moveTowards(this.targetPosition, this.wanderSpeed, deltaTime)
                     this.isMoving = true
 
-                    // Face movement direction (only rotate around Y-axis to stay upright)
+                    // Face player.movement direction (only rotate around Y-axis to stay upright)
                     const direction = this.targetPosition.clone().sub(this.position)
                     direction.y = 0 // Ignore vertical difference
                     direction.normalize()
@@ -2303,7 +1750,7 @@ class CreepyFigure {
         // Update scream audio (volume based on distance, stop if too close)
         this.updateScreamAudio()
 
-        // Update animations based on movement
+        // Update animations based on player.movement
         if (this.mixer) {
             this.mixer.update(deltaTime)
 
@@ -2449,16 +1896,16 @@ function generateCreepersInCell(gridX, gridZ, playerX = 0, playerZ = 10) {
     const key = `${gridX},${gridZ}`
     if (creeperGrid.has(key)) return
     
-    // Calculate if this cell is in front of the player based on movement direction
-    const movementDirection = new THREE.Vector2(movement.forward ? 0 : (movement.backward ? Math.PI : null))
-    if (movement.left) movementDirection.y = movementDirection.y ? movementDirection.y - Math.PI/4 : -Math.PI/2
-    if (movement.right) movementDirection.y = movementDirection.y ? movementDirection.y + Math.PI/4 : Math.PI/2
+    // Calculate if this cell is in front of the player based on player.movement direction
+    const movementDirection = new THREE.Vector2(player.movement.forward ? 0 : (player.movement.backward ? Math.PI : null))
+    if (player.movement.left) movementDirection.y = movementDirection.y ? movementDirection.y - Math.PI/4 : -Math.PI/2
+    if (player.movement.right) movementDirection.y = movementDirection.y ? movementDirection.y + Math.PI/4 : Math.PI/2
     
     const cellCenterX = gridX * CREEPER_GRID_SIZE
     const cellCenterZ = gridZ * CREEPER_GRID_SIZE
     const toCell = new THREE.Vector2(cellCenterX - playerX, cellCenterZ - playerZ).normalize()
     
-    // Calculate angle between movement direction and cell direction
+    // Calculate angle between player.movement direction and cell direction
     let angleToCell = 0
     if (movementDirection.y !== null) {
         angleToCell = Math.abs(movementDirection.angle() - toCell.angle())
@@ -2649,83 +2096,7 @@ function initializeCreepers(playerX, playerZ) {
 // Initialize creepers around starting position
 initializeCreepers(0, 10)
 
-// ---------- Lightning Manager ----------
-class LightingManager {
-    constructor(renderer, light, minimap = null) {
-        this.renderer = renderer
-        this.light = light
-        this.minimap = minimap
-        this.baseExposure = renderer.toneMappingExposure
-        this.timeToNextFlash = this._randGap()
-        this.sequence = null
-        this.wasLightningActive = false
-    }
-
-    _randGap() { return Math.random() * 7 + 5 }
-
-    _buildFlashSequence() {
-        const strokes = 2 + Math.floor(Math.random() * 4)
-        let t = 0
-        const pulses = []
-        for (let i = 0; i < strokes; i++) {
-            const duration = 0.035 + Math.random() * 0.09
-            const gap = (i === strokes - 1) ? 0 : 0.04 + Math.random() * 0.08
-            const intensity = 2.5 + Math.random() * 2
-            pulses.push({ start: t, duration, intensity })
-            t += duration + gap
-        }
-        return { time: 0, pulses, total: t }
-    }
-
-    update(dt) {
-        const isLightningActive = this.sequence !== null
-        
-        if (this.sequence) {
-            this.sequence.time += dt
-            const seq = this.sequence
-            const current = seq.pulses.find(p => seq.time >= p.start && seq.time <= p.start + p.duration)
-            if (current) {
-                const localT = (seq.time - current.start) / current.duration
-                const ramp = localT < 0.15 ? (localT / 0.15) : Math.pow(1 - localT, 2)
-                const expoBoost = current.intensity * ramp
-                this.light.intensity = current.intensity * ramp
-                this.renderer.toneMappingExposure = this.baseExposure + expoBoost
-                
-                // Trigger minimap reveal on first pulse of lightning
-                if (!this.wasLightningActive && this.minimap) {
-                    const creeperPositions = this.minimap.getCreeperPositions(creepyFigure, creepers)
-                    this.minimap.onLightningFlash(creeperPositions)
-                }
-            } else {
-                this.light.intensity = 0
-                this.renderer.toneMappingExposure = this.baseExposure
-            }
-
-            if (seq.time >= seq.total) {
-                this.sequence = null
-                this.light.intensity = 0
-                this.renderer.toneMappingExposure = this.baseExposure
-                this.timeToNextFlash = this._randGap()
-                
-                // Notify minimap that lightning ended
-                if (this.minimap) {
-                    this.minimap.onLightningEnd()
-                }
-            }
-        } else {
-            this.timeToNextFlash -= dt
-            if (this.timeToNextFlash <= 0) {
-                this.sequence = this._buildFlashSequence()
-            }
-        }
-        
-        this.wasLightningActive = isLightningActive
-    }
-    
-    setMinimap(minimap) {
-        this.minimap = minimap
-    }
-}
+// ---------- Lighting Manager ----------
 
 // Initialize minimap when script loads
 let minimap = null
@@ -2763,33 +2134,33 @@ const clock = new THREE.Clock()
 // Keyboard controls
 document.addEventListener('keydown', (e) => {
     switch(e.key.toLowerCase()) {
-        case 'w': movement.forward = true; break
-        case 's': movement.backward = true; break
-        case 'a': movement.left = true; break
-        case 'd': movement.right = true; break
+        case 'w': player.movement.forward = true; break
+        case 's': player.movement.backward = true; break
+        case 'a': player.movement.left = true; break
+        case 'd': player.movement.right = true; break
         case 'shift': 
-            movement.shift = true
-            if (movement.crouch) {
+            player.movement.shift = true
+            if (player.movement.crouch) {
                 // If crouching, transition to sprint
-                movement.crouch = false
-                movement.sprint = true
-                playerState.stance = 'standing'
+                player.movement.crouch = false
+                player.movement.sprint = true
+                player.playerState.stance = 'standing'
                 console.log('🏃 Transitioning from crouch to sprint')
             } else {
                 // Normal sprint behavior
-                if (staminaSystem.current >= staminaSystem.minSprintStamina) {
-                    movement.sprint = true
+                if (player.staminaSystem.current >= player.staminaSystem.minSprintStamina) {
+                    player.movement.sprint = true
                 }
             }
             break
         case 'c': 
-            movement.crouch = !movement.crouch
-            playerState.stance = movement.crouch ? 'crouching' : 'standing'
+            player.movement.crouch = !player.movement.crouch
+            player.playerState.stance = player.movement.crouch ? 'crouching' : 'standing'
             // Can't sprint while crouching
-            if (movement.crouch) {
-                movement.sprint = false
+            if (player.movement.crouch) {
+                player.movement.sprint = false
             }
-            console.log(`${movement.crouch ? '🦆 Crouching' : '🚶 Standing'}`)
+            console.log(`${player.movement.crouch ? '🦆 Crouching' : '🚶 Standing'}`)
             break
         case 'f': // Debug: force figure to appear
             creepyFigure.forceAppear()
@@ -2810,8 +2181,8 @@ document.addEventListener('keydown', (e) => {
                 // Sort creepers by distance for better readability
                 const creeperArray = Array.from(creepers.entries()).map(([key, creeper]) => {
                     const distance = Math.sqrt(
-                        Math.pow(creeper.position.x - cameraGroup.position.x, 2) + 
-                        Math.pow(creeper.position.z - cameraGroup.position.z, 2)
+                        Math.pow(creeper.position.x - player.cameraGroup.position.x, 2) + 
+                        Math.pow(creeper.position.z - player.cameraGroup.position.z, 2)
                     )
                     return { key, creeper, distance }
                 }).sort((a, b) => a.distance - b.distance)
@@ -2873,7 +2244,7 @@ document.addEventListener('keydown', (e) => {
                 
                 // Find closest creeper for context
                 let closestDistance = Infinity
-                const playerPos = cameraGroup.position
+                const playerPos = player.cameraGroup.position
                 
                 if (creepyFigure && creepyFigure.position) {
                     const distance = Math.sqrt(
@@ -2915,19 +2286,19 @@ document.addEventListener('keydown', (e) => {
         case 'n': // Debug: test minimap orientation
             if (minimap) {
                 console.log('🧭 Testing minimap orientation...')
-                console.log(`Player position: (${cameraGroup.position.x.toFixed(1)}, ${cameraGroup.position.z.toFixed(1)})`)
+                console.log(`Player position: (${player.cameraGroup.position.x.toFixed(1)}, ${player.cameraGroup.position.z.toFixed(1)})`)
                 console.log(`Player rotation: ${(camera.rotation.y * 180 / Math.PI).toFixed(1)}°`)
                 
                 // Create a test creeper position directly in front of the player
-                // Use the same forward calculation as the movement system
+                // Use the same forward calculation as the player.movement system
                 const testDistance = 20
                 const forward = new THREE.Vector3(0, 0, -1)
                 forward.applyQuaternion(camera.quaternion)
                 forward.y = 0
                 forward.normalize()
                 
-                const forwardX = cameraGroup.position.x + forward.x * testDistance
-                const forwardZ = cameraGroup.position.z + forward.z * testDistance
+                const forwardX = player.cameraGroup.position.x + forward.x * testDistance
+                const forwardZ = player.cameraGroup.position.z + forward.z * testDistance
                 
                 console.log(`Forward vector: (${forward.x.toFixed(3)}, ${forward.z.toFixed(3)})`)
                 console.log(`Test creeper position (should appear above player): (${forwardX.toFixed(1)}, ${forwardZ.toFixed(1)})`)
@@ -2954,17 +2325,17 @@ document.addEventListener('keydown', (e) => {
 
 document.addEventListener('keyup', (e) => {
     switch(e.key.toLowerCase()) {
-        case 'w': movement.forward = false; break
-        case 's': movement.backward = false; break
-        case 'a': movement.left = false; break
-        case 'd': movement.right = false; break
+        case 'w': player.movement.forward = false; break
+        case 's': player.movement.backward = false; break
+        case 'a': player.movement.left = false; break
+        case 'd': player.movement.right = false; break
         case 'shift': 
-            movement.shift = false
-            movement.sprint = false
+            player.movement.shift = false
+            player.movement.sprint = false
             // Return to crouch if we were crouching before sprinting
-            if (!movement.crouch) {
-                movement.crouch = true
-                playerState.stance = 'crouching'
+            if (!player.movement.crouch) {
+                player.movement.crouch = true
+                player.playerState.stance = 'crouching'
                 console.log('🦆 Returning to crouch after sprint')
             }
             break
@@ -2980,7 +2351,7 @@ function animate() {
     
     // Update lightning & survival timer
     if (lightingManager) {
-        lightingManager.update(delta)
+        lightingManager.update(delta, creepyFigure, creepers)
     }
 
     if (timerElement) {
@@ -2992,12 +2363,12 @@ function animate() {
     
     // Update minimap
     if (minimap) {
-        minimap.updatePlayerPosition(cameraGroup.position.x, cameraGroup.position.z, camera.rotation.y)
+        minimap.updatePlayerPosition(player.cameraGroup.position.x, player.cameraGroup.position.z, camera.rotation.y)
         minimap.update(creepyFigure, creepers)
     }
     
     // Update creepy figure
-    creepyFigure.update(delta, cameraGroup.position)
+    creepyFigure.update(delta, player.cameraGroup.position)
     
     // Update all creepers
     for (const [key, creeper] of creepers.entries()) {
@@ -3017,7 +2388,7 @@ function animate() {
             }
         }
         
-        creeper.update(delta, cameraGroup.position)
+        creeper.update(delta, player.cameraGroup.position)
     }
     
     // Update dynamic heartbeat speed based on closest creeper
@@ -3031,7 +2402,7 @@ function animate() {
     
     // Check main creeper
     if (creepyFigure && creepyFigure.position) {
-        const distance = creepyFigure.position.distanceTo(cameraGroup.position)
+        const distance = creepyFigure.position.distanceTo(player.cameraGroup.position)
         closestCreeperDistance = Math.min(closestCreeperDistance, distance)
         
         if (distance < 60) nearbyCreepers++
@@ -3042,7 +2413,7 @@ function animate() {
     // Check all other creepers
     for (const [key, creeper] of creepers.entries()) {
         if (creeper && creeper.position) {
-            const distance = creeper.position.distanceTo(cameraGroup.position)
+            const distance = creeper.position.distanceTo(player.cameraGroup.position)
             closestCreeperDistance = Math.min(closestCreeperDistance, distance)
             
             if (distance < 60) nearbyCreepers++
@@ -3086,9 +2457,9 @@ function animate() {
     if (infoElement && !objective.completed) {
         let statusText = 'SURVIVE THE FOREST<br>Reach the yellow marker'
         
-        if (playerState.isInGrass && playerState.stance === 'crouching') {
+        if (player.playerState.isInGrass && player.playerState.stance === 'crouching') {
             statusText += '<br><span style="color: #00ff00;">HIDDEN IN GRASS</span>'
-        } else if (playerState.stance === 'crouching') {
+        } else if (player.playerState.stance === 'crouching') {
             statusText += '<br><span style="color: #ffff00;">CROUCHING</span>'
         }
         
@@ -3114,49 +2485,49 @@ function animate() {
     camera.rotation.y = THREE.MathUtils.degToRad(-lon)
     camera.rotation.x = THREE.MathUtils.degToRad(lat)
     
-    // Update player movement
-    let currentSpeed = movementSpeeds.walk // Default walk speed
+    // Update player player.movement
+    let currentSpeed = player.movementSpeeds.walk // Default walk speed
     
     // Determine current speed based on stance and input
-    if (playerState.stance === 'crouching') {
-        currentSpeed = movementSpeeds.crouch
-        playerState.noiseLevel = 0.1 // Very quiet
-        cameraGroup.position.y = 1.2 // Lower camera when crouching
+    if (player.playerState.stance === 'crouching') {
+        currentSpeed = player.movementSpeeds.crouch
+        player.playerState.noiseLevel = 0.1 // Very quiet
+        player.cameraGroup.position.y = 1.2 // Lower camera when crouching
     } else {
-        cameraGroup.position.y = 2.2 // Normal camera height
+        player.cameraGroup.position.y = 2.2 // Normal camera height
         
-        if (movement.sprint && staminaSystem.current > 0) {
-            currentSpeed = movementSpeeds.sprint
-            playerState.noiseLevel = 1.0 // Very loud
+        if (player.movement.sprint && player.staminaSystem.current > 0) {
+            currentSpeed = player.movementSpeeds.sprint
+            player.playerState.noiseLevel = 1.0 // Very loud
             // Drain stamina
-            staminaSystem.current = Math.max(0, staminaSystem.current - staminaSystem.sprintCost * delta)
+            player.staminaSystem.current = Math.max(0, player.staminaSystem.current - player.staminaSystem.sprintCost * delta)
             
             // Stop sprinting if out of stamina
-            if (staminaSystem.current === 0) {
-                movement.sprint = false
+            if (player.staminaSystem.current === 0) {
+                player.movement.sprint = false
                 console.log('😮‍💨 Out of stamina!')
             }
-        } else if (movement.shift && !movement.crouch) {
-            currentSpeed = movementSpeeds.run
-            playerState.noiseLevel = 0.5 // Moderate noise
+        } else if (player.movement.shift && !player.movement.crouch) {
+            currentSpeed = player.movementSpeeds.run
+            player.playerState.noiseLevel = 0.5 // Moderate noise
         } else {
-            currentSpeed = movementSpeeds.walk
-            playerState.noiseLevel = 0.3 // Low noise
+            currentSpeed = player.movementSpeeds.walk
+            player.playerState.noiseLevel = 0.3 // Low noise
         }
     }
     
     // Regenerate stamina when not sprinting
-    if (!movement.sprint) {
-        staminaSystem.current = Math.min(staminaSystem.max, staminaSystem.current + staminaSystem.regenRate * delta)
+    if (!player.movement.sprint) {
+        player.staminaSystem.current = Math.min(player.staminaSystem.max, player.staminaSystem.current + player.staminaSystem.regenRate * delta)
     }
     
     // Update stamina bar
     if (staminaFill) {
-        staminaFill.style.width = `${(staminaSystem.current / staminaSystem.max) * 100}%`
+        staminaFill.style.width = `${(player.staminaSystem.current / player.staminaSystem.max) * 100}%`
         // Change color based on stamina level
-        if (staminaSystem.current < 30) {
+        if (player.staminaSystem.current < 30) {
             staminaFill.style.background = 'linear-gradient(to right, #ff0000, #ff6600)'
-        } else if (staminaSystem.current < 60) {
+        } else if (player.staminaSystem.current < 60) {
             staminaFill.style.background = 'linear-gradient(to right, #ff6600, #ffff00)'
         } else {
             staminaFill.style.background = 'linear-gradient(to right, #00ff00, #ffff00)'
@@ -3165,10 +2536,10 @@ function animate() {
     
     // Show/hide stamina bar based on stamina level
     if (staminaBar) {
-        staminaBar.style.opacity = staminaSystem.current < staminaSystem.max ? '1' : '0'
+        staminaBar.style.opacity = player.staminaSystem.current < player.staminaSystem.max ? '1' : '0'
     }
     
-    playerDirection.set(0, 0, 0)
+    player.playerDirection.set(0, 0, 0)
     
     const forward = new THREE.Vector3(0, 0, -1)
     forward.applyQuaternion(camera.quaternion)
@@ -3180,25 +2551,25 @@ function animate() {
     right.y = 0
     right.normalize()
     
-    if (movement.forward) playerDirection.add(forward)
-    if (movement.backward) playerDirection.sub(forward)
-    if (movement.left) playerDirection.sub(right)
-    if (movement.right) playerDirection.add(right)
+    if (player.movement.forward) player.playerDirection.add(forward)
+    if (player.movement.backward) player.playerDirection.sub(forward)
+    if (player.movement.left) player.playerDirection.sub(right)
+    if (player.movement.right) player.playerDirection.add(right)
     
-    playerDirection.normalize()
+    player.playerDirection.normalize()
     
-    // Apply movement with collision detection
-    if (playerDirection.length() > 0) {
-        const newPosition = cameraGroup.position.clone()
-        newPosition.x += playerDirection.x * currentSpeed * delta
-        newPosition.z += playerDirection.z * currentSpeed * delta
+    // Apply player.movement with collision detection
+    if (player.playerDirection.length() > 0) {
+        const newPosition = player.cameraGroup.position.clone()
+        newPosition.x += player.playerDirection.x * currentSpeed * delta
+        newPosition.z += player.playerDirection.z * currentSpeed * delta
         
         if (!checkCollision(newPosition)) {
-            cameraGroup.position.x = newPosition.x
-            cameraGroup.position.z = newPosition.z
+            player.cameraGroup.position.x = newPosition.x
+            player.cameraGroup.position.z = newPosition.z
             
             // Check if player is in tall grass
-            playerState.isInGrass = checkIfInTallGrass(cameraGroup.position)
+            player.playerState.isInGrass = checkIfInTallGrass(player.cameraGroup.position)
             
             // Update forest generation based on new position
             updateTrees(newPosition.x, newPosition.z)
@@ -3217,23 +2588,23 @@ function animate() {
                 }
             }
             
-            // Head bobbing - adjust based on movement speed
-            const bobSpeed = currentSpeed / movementSpeeds.walk * 5
+            // Head bobbing - adjust based on player.movement speed
+            const bobSpeed = currentSpeed / player.movementSpeeds.walk * 5
             bobAmount += delta * bobSpeed
-            const baseHeight = playerState.stance === 'crouching' ? 1.2 : 2.2
-            cameraGroup.position.y = baseHeight + Math.sin(bobAmount) * 0.05 * (currentSpeed / movementSpeeds.walk)
+            const baseHeight = player.playerState.stance === 'crouching' ? 1.2 : 2.2
+            player.cameraGroup.position.y = baseHeight + Math.sin(bobAmount) * 0.05 * (currentSpeed / player.movementSpeeds.walk)
             
-            // Initialize audio on first movement
+            // Initialize audio on first player.movement
             initAudio()
         }
     } else {
         // Still noise decay
-        playerState.noiseLevel *= 0.9
+        player.playerState.noiseLevel *= 0.9
     }
     
     // Animate dust particles
-    const playerX = cameraGroup.position.x
-    const playerZ = cameraGroup.position.z
+    const playerX = player.cameraGroup.position.x
+    const playerZ = player.cameraGroup.position.z
     
     dustParticles.forEach((particle, i) => {
         // Apply velocity

@@ -1,13 +1,14 @@
 import { defineConfig } from 'vite'
 
 export default defineConfig({
+  root: 'public',
   server: {
     port: 3000,
     open: true,
     cors: true
   },
   build: {
-    outDir: 'dist',
+    outDir: '../dist',
     assetsDir: 'assets',
     rollupOptions: {
       input: {
@@ -16,4 +17,4 @@ export default defineConfig({
     }
   },
   assetsInclude: ['**/*.glb', '**/*.gltf', '**/*.fbx', '**/*.obj', '**/*.wav', '**/*.mp3']
-}) 
+})

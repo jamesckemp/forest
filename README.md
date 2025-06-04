@@ -40,11 +40,12 @@ Hide from the creepy figure by using trees, rocks, and other obstacles to break 
    ```
 
 3. **Add your creep model**:
-   - Place your `creep.glb` file in the root directory
+   - Place your `creep.glb` file in `public/assets/models`
    - Supported formats: GLB (recommended), GLTF
    - The game will use a fallback figure if the model isn't found
 
 4. **Add audio files** (optional):
+   - Place audio files in `public/assets/audio`
    - `forest.wav` - Forest ambience (loops)
    - `ambient.wav` - Background music (plays once)
 
@@ -71,14 +72,20 @@ npm run build
 
 ```
 black-smoke-survival/
-├── index.html          # Main HTML file
-├── main.js             # Game logic and Three.js code
-├── package.json        # NPM configuration
-├── vite.config.js      # Vite configuration
-├── creep.glb          # Your creepy figure model (add this)
-├── forest.wav         # Forest ambience audio (optional)
-├── ambient.wav        # Background music (optional)
-└── README.md          # This file
+├── public/
+│   ├── index.html          # Main HTML file
+│   └── assets/
+│       ├── models/         # creep.glb, runner.glb, etc.
+│       └── audio/          # wav files
+├── src/
+│   ├── main.js             # Game logic and Three.js code
+│   ├── lighting/
+│   │   └── index.js        # Lighting system
+│   └── ui/
+│       └── minimap.js      # Minimap implementation
+├── package.json            # NPM configuration
+├── vite.config.js          # Vite configuration
+└── README.md               # This file
 ```
 
 ## 🎨 Model Requirements
@@ -103,7 +110,7 @@ For best results with your creep model:
 ## 🐛 Troubleshooting
 
 **Model not loading?**
-- Ensure `creep.glb` is in the root directory
+- Ensure `creep.glb` is in `public/assets/models`
 - Check browser console for error messages
 - The game will use a fallback figure if model fails to load
 
